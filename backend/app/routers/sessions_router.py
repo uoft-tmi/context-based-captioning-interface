@@ -37,6 +37,13 @@ async def end_session(session_id: str, user_id=Depends(get_user_id)):
     return await session_service.end_session(session_id=session_id, user_id=user_id)
 
 
+@router.post("/{session_id}/delete")
+async def delete_session(session_id: str, user_id=Depends(get_user_id)):
+    return await session_service.delete_session(session_id=session_id, user_id=user_id)
+
+
 @router.post("/{session_id}/error")
 async def mark_session_error(session_id: str, user_id=Depends(get_user_id)):
-    await session_service.mark_session_error(session_id=session_id, user_id=user_id)
+    return await session_service.mark_session_error(
+        session_id=session_id, user_id=user_id
+    )

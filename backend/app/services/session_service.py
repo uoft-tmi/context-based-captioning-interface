@@ -78,7 +78,7 @@ async def update_session_pdf(
 async def end_session(
     session_id: str,
     user_id: str,
-) -> Session:
+) -> dict:
     try:
         session = await sessions_db.end_session(
             session_id=session_id,
@@ -86,7 +86,23 @@ async def end_session(
         )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        return session
+        return {"message": "Session ended successfully", "session": session}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def delete_session(
+    session_id: str,
+    user_id: str,
+) -> dict:
+    try:
+        num_deleted = await sessions_db.delete_session(
+            session_id=session_id,
+            user_id=user_id,
+        )
+        if num_deleted == 0:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"message": f"Deleted {session_id} successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -94,11 +110,12 @@ async def end_session(
 async def mark_session_error(
     session_id: str,
     user_id: str,
-) -> None:
+) -> dict:
     try:
         await sessions_db.mark_session_error(
             session_id=session_id,
             user_id=user_id,
         )
+        return {"message": "Session marked as error successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

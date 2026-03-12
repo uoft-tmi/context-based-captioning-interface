@@ -120,6 +120,19 @@ async def end_session(session_id: str, user_id: str) -> Optional[Session]:
         return _row_to_session(row) if row else None
 
 
+async def delete_session(session_id: str, user_id: str) -> int:
+    async with get_pool().acquire() as conn:
+        row: str = await conn.execute(
+            """
+            DELETE FROM sessions
+            WHERE id = $1 AND user_id = $2
+            """,
+            UUID(session_id),
+            UUID(user_id),
+        )
+        return int(row.split(" ")[-1])
+
+
 async def mark_session_error(session_id: str, user_id: str) -> None:
     async with get_pool().acquire() as conn:
         await conn.execute(

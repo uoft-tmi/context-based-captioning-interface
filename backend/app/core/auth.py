@@ -21,7 +21,6 @@ def get_payload(token: str) -> dict:
         signing_key.key,
         algorithms=["ES256"],
         audience="authenticated",
-        issuer=settings.SUPABASE_URL,
     )
     return payload
 
@@ -42,7 +41,7 @@ def get_current_user(
         )
     except jwt.InvalidTokenError as e:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token {e}"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}"
         )
 
 
