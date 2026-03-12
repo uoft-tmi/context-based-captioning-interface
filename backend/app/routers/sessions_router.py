@@ -4,7 +4,7 @@ from app.core.auth import get_user_id
 from app.models.session import CreateSessionRequest
 from app.services import session_service
 
-router = APIRouter(prefix="/sessions", tags=["sessions"])
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 @router.post("")
@@ -12,7 +12,6 @@ async def create_session(body: CreateSessionRequest, user_id=Depends(get_user_id
     return await session_service.create_session(
         user_id=user_id,
         mode=body.mode,
-        expires_at=body.expires_at,
         pdf_url=body.pdf_url,
     )
 
@@ -35,11 +34,6 @@ async def get_session(session_id: str, user_id=Depends(get_user_id)):
 @router.post("/{session_id}/end")
 async def end_session(session_id: str, user_id=Depends(get_user_id)):
     return await session_service.end_session(session_id=session_id, user_id=user_id)
-
-
-@router.post("/{session_id}/delete")
-async def delete_session(session_id: str, user_id=Depends(get_user_id)):
-    return await session_service.delete_session(session_id=session_id, user_id=user_id)
 
 
 @router.post("/{session_id}/error")

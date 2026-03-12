@@ -5,13 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import Settings, get_settings
 from app.database.pool import close_pool, create_pool
-from app.routers import sessions_router
+from app.database.supabase_client import init_supabase_client
+from app.routers import sessions_router, stream_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings: Settings = get_settings()
     await create_pool(settings.POSTGRES_URL)
+    await init_supabase_client()
     yield
     await close_pool()
 
@@ -30,7 +32,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(sessions_router.router)
+app.include_router(sessions_router.router, prefix="api")
+app.include_router(stream_router.router, prefix="ws")
 
 
 @app.get("/health")
