@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 
 
 class SessionMode(str, Enum):
@@ -31,5 +31,12 @@ class Session(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     mode: SessionMode
-    expires_at: datetime
     pdf_url: Optional[str] = None
+
+
+class UploadLinkResponse(BaseModel):
+    bucket: str
+    object_path: str
+    token: str
+    signed_url: HttpUrl
+    expires_in: int  # seconds

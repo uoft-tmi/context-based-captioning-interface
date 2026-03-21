@@ -8,12 +8,14 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_KEY: str = ""
     SUPABASE_JWKS_URL: str = ""
+    SUPABASE_AUDIENCE: str = ""
     POSTGRES_URL: str = ""
 
     # Limits
     MAX_SESSION_DURATION_SECONDS: int = 3600  # 1 hour
     CHUNK_TIMEOUT_SECONDS: int = 10
     NOTES_TIMEOUT_SECONDS: int = 30
+    MAX_PDF_SIZE: int = 10 * 1024 * 1024  # 10 MB
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

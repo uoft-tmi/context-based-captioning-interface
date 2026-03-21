@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -23,19 +22,17 @@ def _row_to_session(row) -> Session:
 async def create_session(
     user_id: str,
     mode: str,
-    expires_at: datetime,
     pdf_url: Optional[str] = None,
 ) -> Session:
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO sessions (user_id, mode, expires_at, pdf_url)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO sessions (user_id, mode, pdf_url)
+            VALUES ($1, $2, $3)
             RETURNING *
             """,
             UUID(user_id),
             mode,
-            expires_at,
             pdf_url,
         )
 
@@ -91,7 +88,7 @@ async def update_session_pdf(
     session_id: str, user_id: str, pdf_url: str
 ) -> Optional[Session]:
     async with get_pool().acquire() as conn:
-        row = await conn.execute(
+        row = await conn.fetchrow(
             """
         UPDATE sessions
         SET pdf_url = $1

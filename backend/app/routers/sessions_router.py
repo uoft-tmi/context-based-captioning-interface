@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, UploadFile
 
 from app.core.auth import get_user_id
+from app.database.supabase_client import get_supabase_client
 from app.models.session import CreateSessionRequest
 from app.services import session_service
 
@@ -31,9 +32,30 @@ async def get_session(session_id: str, user_id=Depends(get_user_id)):
     return await session_service.get_session(session_id=session_id, user_id=user_id)
 
 
+@router.post("/{session_id}/notes")
+async def upload_notes(
+    session_id: str,
+    file: UploadFile,
+    user_id=Depends(get_user_id),
+    supabase=Depends(get_supabase_client),
+):
+    return await session_service.upload_notes(
+        session_id=session_id,
+        file=file,
+        user_id=user_id,
+        supabase_client=supabase,
+    )
+
+
 @router.post("/{session_id}/end")
-async def end_session(session_id: str, user_id=Depends(get_user_id)):
-    return await session_service.end_session(session_id=session_id, user_id=user_id)
+async def end_session(
+    session_id: str,
+    user_id=Depends(get_user_id),
+    supabase_client=Depends(get_supabase_client),
+):
+    return await session_service.end_session(
+        session_id=session_id, user_id=user_id, supabase_client=supabase_client
+    )
 
 
 @router.post("/{session_id}/error")

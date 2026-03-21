@@ -32,8 +32,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(sessions_router.router, prefix="api")
-app.include_router(stream_router.router, prefix="ws")
+app.include_router(sessions_router.router)
+app.include_router(stream_router.router)
 
 
 @app.get("/health")
