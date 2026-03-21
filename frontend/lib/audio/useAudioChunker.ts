@@ -42,6 +42,7 @@ interface UseAudioChunkerResult {
 
 const DEFAULT_CHUNK_DURATION_MS = 3000;
 const DEFAULT_OVERSIZED_WARNING_BYTES = 512 * 1024;
+const TARGET_SAMPLE_RATE = 16_000;
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -68,16 +69,96 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-function getSupportedMime(preferredMimeType: ChunkerMime): ChunkerMime {
-  if (typeof MediaRecorder === "undefined") {
-    return preferredMimeType;
+function downsampleTo16k(input: Float32Array, sourceRate: number): Float32Array {
+  if (sourceRate === TARGET_SAMPLE_RATE) {
+    return input;
   }
 
-  if (MediaRecorder.isTypeSupported(preferredMimeType)) {
-    return preferredMimeType;
+  const sampleRateRatio = sourceRate / TARGET_SAMPLE_RATE;
+  const targetLength = Math.round(input.length / sampleRateRatio);
+  const output = new Float32Array(targetLength);
+
+  let outputIndex = 0;
+  let inputIndex = 0;
+
+  while (outputIndex < targetLength) {
+    const nextInputIndex = Math.round((outputIndex + 1) * sampleRateRatio);
+    let accum = 0;
+    let count = 0;
+
+    for (let i = inputIndex; i < nextInputIndex && i < input.length; i += 1) {
+      accum += input[i];
+      count += 1;
+    }
+
+    output[outputIndex] = count > 0 ? accum / count : 0;
+    outputIndex += 1;
+    inputIndex = nextInputIndex;
   }
 
-  return "audio/webm";
+  return output;
+}
+
+function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number): Blob {
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    view.setInt16(offset, int16, true);
+    offset += bytesPerSample;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function consumeSamples(queue: Float32Array[], sampleCount: number): Float32Array {
+  const out = new Float32Array(sampleCount);
+  let offset = 0;
+
+  while (offset < sampleCount && queue.length > 0) {
+    const head = queue[0];
+    const needed = sampleCount - offset;
+
+    if (head.length <= needed) {
+      out.set(head, offset);
+      offset += head.length;
+      queue.shift();
+      continue;
+    }
+
+    out.set(head.subarray(0, needed), offset);
+    queue[0] = head.subarray(needed);
+    offset += needed;
+  }
+
+  return out;
 }
 
 export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunkerResult {
@@ -134,11 +215,35 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
   const [lastChunkSizeBytes, setLastChunkSizeBytes] = useState<number | null>(null);
 
   const streamRef = useRef<MediaStream | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const mutedGainNodeRef = useRef<GainNode | null>(null);
+  const pcmQueueRef = useRef<Float32Array[]>([]);
+  const queuedSampleCountRef = useRef(0);
   const chunkIndexRef = useRef(0);
   const sessionStartedAtRef = useRef<number | null>(null);
   const lastChunkAtRef = useRef<number | null>(null);
   const stopRequestedRef = useRef(false);
+
+  const cleanUpAudioGraph = useCallback(() => {
+    processorNodeRef.current?.disconnect();
+    sourceNodeRef.current?.disconnect();
+    mutedGainNodeRef.current?.disconnect();
+
+    processorNodeRef.current = null;
+    sourceNodeRef.current = null;
+    mutedGainNodeRef.current = null;
+
+    const ctx = audioContextRef.current;
+    audioContextRef.current = null;
+    if (ctx) {
+      void ctx.close();
+    }
+
+    pcmQueueRef.current = [];
+    queuedSampleCountRef.current = 0;
+  }, []);
 
   const cleanUpStream = useCallback(() => {
     if (!streamRef.current) {
@@ -186,14 +291,10 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
   const stop = useCallback(() => {
     stopRequestedRef.current = true;
 
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
-    }
-
-    recorderRef.current = null;
     setIsRecording(false);
+    cleanUpAudioGraph();
     cleanUpStream();
-  }, [cleanUpStream]);
+  }, [cleanUpAudioGraph, cleanUpStream]);
 
   const start = useCallback(async () => {
     if (isRecording) {
@@ -207,8 +308,9 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
       return;
     }
 
-    if (typeof MediaRecorder === "undefined") {
-      onError?.("MediaRecorder is not available in this browser.");
+    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) {
+      onError?.("Web Audio API is not available in this browser.");
       return;
     }
 
@@ -219,90 +321,110 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     setLastChunkSizeBytes(null);
     stopRequestedRef.current = false;
 
-    const supportedMime = getSupportedMime(preferredMimeType);
-    let recorder: MediaRecorder;
-
-    try {
-      recorder = new MediaRecorder(streamRef.current, {
-        mimeType: supportedMime,
-        audioBitsPerSecond: 128_000,
-      });
-    } catch {
-      onWarning?.(
-        `Preferred recording format (${supportedMime}) is unavailable. Falling back to browser default.`
-      );
-      recorder = new MediaRecorder(streamRef.current);
+    if (preferredMimeType !== "audio/wav") {
+      onWarning?.("Captured audio is always emitted as 16kHz mono WAV for backend compatibility.");
     }
 
-    recorder.ondataavailable = async (event: BlobEvent) => {
-      if (!event.data || event.data.size === 0) {
+    const audioContext = new AudioCtx();
+    const source = audioContext.createMediaStreamSource(streamRef.current);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const mutedGain = audioContext.createGain();
+    mutedGain.gain.value = 0;
+
+    source.connect(processor);
+    processor.connect(mutedGain);
+    mutedGain.connect(audioContext.destination);
+
+    audioContextRef.current = audioContext;
+    sourceNodeRef.current = source;
+    processorNodeRef.current = processor;
+    mutedGainNodeRef.current = mutedGain;
+
+    const samplesPerChunk = Math.max(
+      1,
+      Math.round(audioContext.sampleRate * (chunkDurationMs / 1000))
+    );
+
+    processor.onaudioprocess = (event: AudioProcessingEvent) => {
+      const input = event.inputBuffer.getChannelData(0);
+      if (!input || input.length === 0) {
         return;
       }
 
-      const now = Date.now();
-      if (sessionStartedAtRef.current === null) {
-        sessionStartedAtRef.current = now;
-      }
+      const copied = new Float32Array(input.length);
+      copied.set(input);
+      pcmQueueRef.current.push(copied);
+      queuedSampleCountRef.current += copied.length;
 
-      const elapsedMs = now - sessionStartedAtRef.current;
-      const driftMs =
-        lastChunkAtRef.current === null
-          ? 0
-          : now - lastChunkAtRef.current - chunkDurationMs;
-      lastChunkAtRef.current = now;
+      while (queuedSampleCountRef.current >= samplesPerChunk) {
+        const chunkSamples = consumeSamples(pcmQueueRef.current, samplesPerChunk);
+        queuedSampleCountRef.current -= samplesPerChunk;
 
-      const chunkIndex = chunkIndexRef.current;
-      chunkIndexRef.current += 1;
-      setChunkCount((prev) => prev + 1);
-      setLastChunkSizeBytes(event.data.size);
+        const downsampled = downsampleTo16k(chunkSamples, audioContext.sampleRate);
+        const wavChunk = encodeMonoPcm16Wav(downsampled, TARGET_SAMPLE_RATE);
 
-      if (event.data.size > oversizedChunkWarningBytes) {
-        onWarning?.(
-          `Chunk ${chunkIndex} is large (${Math.round(
-            event.data.size / 1024
-          )} KB) and may increase latency.`
-        );
-      }
+        const now = Date.now();
+        if (sessionStartedAtRef.current === null) {
+          sessionStartedAtRef.current = now;
+        }
 
-      try {
-        const audioB64 = await blobToBase64(event.data);
+        const elapsedMs = now - sessionStartedAtRef.current;
+        const driftMs =
+          lastChunkAtRef.current === null
+            ? 0
+            : now - lastChunkAtRef.current - chunkDurationMs;
+        lastChunkAtRef.current = now;
 
-        await onChunk({
-          chunkIndex,
-          audioB64,
-          mime: supportedMime,
-          blobSizeBytes: event.data.size,
-          elapsedMs,
-          driftMs,
-          createdAt: new Date(now).toISOString(),
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : `Failed to process chunk ${chunkIndex}.`;
-        onError?.(message);
+        const chunkIndex = chunkIndexRef.current;
+        chunkIndexRef.current += 1;
+        setChunkCount((prev) => prev + 1);
+        setLastChunkSizeBytes(wavChunk.size);
+
+        if (wavChunk.size > oversizedChunkWarningBytes) {
+          onWarning?.(
+            `Chunk ${chunkIndex} is large (${Math.round(
+              wavChunk.size / 1024
+            )} KB) and may increase latency.`
+          );
+        }
+
+        void (async () => {
+          try {
+            const audioB64 = await blobToBase64(wavChunk);
+            await onChunk({
+              chunkIndex,
+              audioB64,
+              mime: "audio/wav",
+              blobSizeBytes: wavChunk.size,
+              elapsedMs,
+              driftMs,
+              createdAt: new Date(now).toISOString(),
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : `Failed to process chunk ${chunkIndex}.`;
+            onError?.(message);
+          }
+        })();
       }
     };
 
-    recorder.onerror = () => {
-      onError?.("Microphone recording failed.");
-      stop();
-    };
+    streamRef.current.getAudioTracks().forEach((track) => {
+      track.onended = () => {
+        setIsRecording(false);
+        cleanUpAudioGraph();
+        cleanUpStream();
+        if (!stopRequestedRef.current) {
+          onWarning?.("Recording stopped unexpectedly. Please start again.");
+        }
+      };
+    });
 
-    recorder.onstop = () => {
-      setIsRecording(false);
-      cleanUpStream();
-
-      if (!stopRequestedRef.current) {
-        onWarning?.("Recording stopped unexpectedly. Please start again.");
-      }
-    };
-
-    recorderRef.current = recorder;
-    recorder.start(chunkDurationMs);
     setIsRecording(true);
   }, [
+    cleanUpAudioGraph,
     chunkDurationMs,
     isRecording,
     onChunk,
@@ -312,7 +434,6 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     permissionStatus,
     preferredMimeType,
     requestPermission,
-    stop,
     cleanUpStream,
   ]);
 
