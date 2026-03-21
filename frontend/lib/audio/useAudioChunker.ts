@@ -28,6 +28,8 @@ interface UseAudioChunkerOptions {
   chunkDurationMs?: number;
   preferredMimeType?: ChunkerMime;
   oversizedChunkWarningBytes?: number;
+  chunkFailureRetryCount?: number;
+  chunkFailureRetryDelayMs?: number;
 }
 
 interface UseAudioChunkerResult {
@@ -42,7 +44,15 @@ interface UseAudioChunkerResult {
 
 const DEFAULT_CHUNK_DURATION_MS = 3000;
 const DEFAULT_OVERSIZED_WARNING_BYTES = 512 * 1024;
+const DEFAULT_CHUNK_FAILURE_RETRY_COUNT = 1;
+const DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS = 300;
 const TARGET_SAMPLE_RATE = 16_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -207,6 +217,8 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     chunkDurationMs = DEFAULT_CHUNK_DURATION_MS,
     preferredMimeType = "audio/webm",
     oversizedChunkWarningBytes = DEFAULT_OVERSIZED_WARNING_BYTES,
+    chunkFailureRetryCount = DEFAULT_CHUNK_FAILURE_RETRY_COUNT,
+    chunkFailureRetryDelayMs = DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS,
   } = options;
 
   const [isRecording, setIsRecording] = useState(false);
@@ -277,12 +289,37 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
       setPermissionStatus("granted");
       return true;
     } catch (error) {
-      const message =
-        error instanceof DOMException && error.name === "NotAllowedError"
-          ? "Microphone permission was denied."
-          : "Unable to access microphone.";
+      let message = "Unable to access microphone.";
+      let nextStatus: PermissionStatus = "error";
 
-      setPermissionStatus(error instanceof DOMException && error.name === "NotAllowedError" ? "denied" : "error");
+      if (error instanceof DOMException) {
+        switch (error.name) {
+          case "NotAllowedError":
+            message = "Microphone permission was denied.";
+            nextStatus = "denied";
+            break;
+          case "NotFoundError":
+            message = "No microphone was found on this device.";
+            break;
+          case "NotReadableError":
+            message = "Microphone is already in use by another application.";
+            break;
+          case "AbortError":
+            message = "Microphone capture was interrupted. Please try again.";
+            break;
+          case "OverconstrainedError":
+            message = "Microphone settings are unsupported on this device.";
+            break;
+          case "SecurityError":
+            message = "Microphone access is blocked by browser security settings.";
+            break;
+          default:
+            message = "Unable to access microphone.";
+            break;
+        }
+      }
+
+      setPermissionStatus(nextStatus);
       onError?.(message);
       return false;
     }
@@ -325,7 +362,24 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
       onWarning?.("Captured audio is always emitted as 16kHz mono WAV for backend compatibility.");
     }
 
-    const audioContext = new AudioCtx();
+    let audioContext: AudioContext;
+    try {
+      audioContext = new AudioCtx();
+    } catch {
+      onError?.("Failed to initialize audio processing. Please reload and try again.");
+      return;
+    }
+
+    if (audioContext.state === "suspended") {
+      try {
+        await audioContext.resume();
+      } catch {
+        onError?.("Audio context is suspended. Interact with the page and try recording again.");
+        void audioContext.close();
+        return;
+      }
+    }
+
     const source = audioContext.createMediaStreamSource(streamRef.current);
     const processor = audioContext.createScriptProcessor(4096, 1, 1);
     const mutedGain = audioContext.createGain();
@@ -391,7 +445,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
         void (async () => {
           try {
             const audioB64 = await blobToBase64(wavChunk);
-            await onChunk({
+            const chunkPayload: AudioChunk = {
               chunkIndex,
               audioB64,
               mime: "audio/wav",
@@ -399,7 +453,28 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
               elapsedMs,
               driftMs,
               createdAt: new Date(now).toISOString(),
-            });
+            };
+
+            let attempt = 0;
+            const maxAttempts = Math.max(0, chunkFailureRetryCount) + 1;
+
+            while (attempt < maxAttempts) {
+              try {
+                await onChunk(chunkPayload);
+                break;
+              } catch (sendError) {
+                attempt += 1;
+
+                if (attempt >= maxAttempts) {
+                  throw sendError;
+                }
+
+                onWarning?.(
+                  `Chunk ${chunkIndex} upload failed (attempt ${attempt}/${maxAttempts - 1}). Retrying...`
+                );
+                await sleep(Math.max(0, chunkFailureRetryDelayMs));
+              }
+            }
           } catch (error) {
             const message =
               error instanceof Error
@@ -435,6 +510,8 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     preferredMimeType,
     requestPermission,
     cleanUpStream,
+    chunkFailureRetryCount,
+    chunkFailureRetryDelayMs,
   ]);
 
   useEffect(() => {

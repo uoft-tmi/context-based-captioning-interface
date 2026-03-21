@@ -75,7 +75,13 @@ export async function sendChunk(
       mime: payload.mime,
     }),
   });
-  return res.json() as Promise<SendChunkResponse>;
+
+  const data = (await res.json()) as SendChunkResponse & { detail?: string };
+  if (!res.ok) {
+    throw new Error(data.detail ?? `Chunk upload failed with status ${res.status}`);
+  }
+
+  return data;
 }
 
 export async function stopSession(sessionId: string) {
