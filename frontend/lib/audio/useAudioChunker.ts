@@ -42,7 +42,9 @@ interface UseAudioChunkerResult {
   stop: () => void;
 }
 
-const DEFAULT_CHUNK_DURATION_MS = 3000;
+const DEFAULT_CHUNK_DURATION_MS = 2500;
+const MIN_CHUNK_DURATION_MS = 2000;
+const MAX_CHUNK_DURATION_MS = 3000;
 const DEFAULT_OVERSIZED_WARNING_BYTES = 512 * 1024;
 const DEFAULT_CHUNK_FAILURE_RETRY_COUNT = 1;
 const DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS = 300;
@@ -182,7 +184,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
    *     console.log(`Chunk ${chunk.chunkIndex}: ${chunk.blobSizeBytes} bytes, drift ${chunk.driftMs}ms`);
    *     // Send chunk to backend: await sendChunk(sessionId, chunk);
    *   },
-   *   chunkDurationMs: 3000,
+  *   chunkDurationMs: 2500,
    *   onWarning: (msg) => console.warn(msg),
    *   onError: (msg) => console.error(msg),
    * });
@@ -190,7 +192,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
    * // Request permission first
    * await requestPermission();
    *
-   * // Start recording (emits chunks every 3 seconds)
+  * // Start recording (emits chunks every ~2.5 seconds by default)
    * await start();
    *
    * // Stop recording
@@ -199,8 +201,8 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
    *
    * Options:
    * - onChunk: Called for each captured chunk (required).
-   * - chunkDurationMs: Chunk interval in ms (default 3000).
-   * - preferredMimeType: "audio/webm" or "audio/wav" (default "audio/webm").
+  * - chunkDurationMs: Chunk interval in ms (default 2500, clamped to 2000-3000).
+  * - preferredMimeType: Input preference only. Captured output is always "audio/wav" for backend compatibility.
    * - onWarning, onError: Optional logging callbacks.
    *
    * Returns:
@@ -220,6 +222,11 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     chunkFailureRetryCount = DEFAULT_CHUNK_FAILURE_RETRY_COUNT,
     chunkFailureRetryDelayMs = DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS,
   } = options;
+
+  const resolvedChunkDurationMs = Math.min(
+    MAX_CHUNK_DURATION_MS,
+    Math.max(MIN_CHUNK_DURATION_MS, chunkDurationMs)
+  );
 
   const [isRecording, setIsRecording] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<PermissionStatus>("idle");
@@ -358,6 +365,12 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     setLastChunkSizeBytes(null);
     stopRequestedRef.current = false;
 
+    if (chunkDurationMs !== resolvedChunkDurationMs) {
+      onWarning?.(
+        `Chunk duration ${chunkDurationMs}ms is outside the supported ${MIN_CHUNK_DURATION_MS}-${MAX_CHUNK_DURATION_MS}ms range. Using ${resolvedChunkDurationMs}ms.`
+      );
+    }
+
     if (preferredMimeType !== "audio/wav") {
       onWarning?.("Captured audio is always emitted as 16kHz mono WAV for backend compatibility.");
     }
@@ -396,7 +409,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
 
     const samplesPerChunk = Math.max(
       1,
-      Math.round(audioContext.sampleRate * (chunkDurationMs / 1000))
+      Math.round(audioContext.sampleRate * (resolvedChunkDurationMs / 1000))
     );
 
     processor.onaudioprocess = (event: AudioProcessingEvent) => {
@@ -426,7 +439,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
         const driftMs =
           lastChunkAtRef.current === null
             ? 0
-            : now - lastChunkAtRef.current - chunkDurationMs;
+            : now - lastChunkAtRef.current - resolvedChunkDurationMs;
         lastChunkAtRef.current = now;
 
         const chunkIndex = chunkIndexRef.current;
@@ -466,7 +479,14 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
                 attempt += 1;
 
                 if (attempt >= maxAttempts) {
-                  throw sendError;
+                  const sendMessage =
+                    sendError instanceof Error
+                      ? sendError.message
+                      : "Unknown chunk upload error";
+                  onWarning?.(
+                    `Chunk ${chunkIndex} dropped after ${maxAttempts} attempt(s): ${sendMessage}`
+                  );
+                  return;
                 }
 
                 onWarning?.(
@@ -501,6 +521,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
   }, [
     cleanUpAudioGraph,
     chunkDurationMs,
+    resolvedChunkDurationMs,
     isRecording,
     onChunk,
     onError,
