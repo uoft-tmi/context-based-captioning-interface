@@ -21,7 +21,6 @@ class Session(BaseModel):
     id: UUID
     user_id: UUID
     mode: SessionMode
-    pdf_url: Optional[str] = None  # where the uploaded PDF is stored
     status: SessionStatus
     created_at: datetime
     expires_at: datetime
@@ -31,7 +30,6 @@ class Session(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     mode: SessionMode
-    pdf_url: Optional[str] = None
 
 
 class UploadLinkResponse(BaseModel):

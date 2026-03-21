@@ -13,9 +13,8 @@ class Settings(BaseSettings):
 
     # Limits
     MAX_SESSION_DURATION_SECONDS: int = 3600  # 1 hour
-    CHUNK_TIMEOUT_SECONDS: int = 10
-    NOTES_TIMEOUT_SECONDS: int = 30
     MAX_PDF_SIZE: int = 10 * 1024 * 1024  # 10 MB
+    MAX_NOTES_PER_SESSION: int = 3
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

@@ -1,13 +1,11 @@
--- migrations/001_sessions.sql
 CREATE TABLE public.sessions (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id               UUID REFERENCES auth.users(id) ON DELETE CASCADE,
     mode                  TEXT NOT NULL CHECK (mode IN ('baseline', 'context')),
-    pdf_url               TEXT DEFAULT NULL,
     status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'finalized', 'error')),
-    created_at            TIMESTAMPTZ DEFAULT NOW() CHECK (expires_at > created_at),
-    expires_at            TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at),
-    finalized_at          TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW() CHECK (expires_at > created_at),
+    expires_at            TIMESTAMPTZ NOT NULL DEFAULT NOW() + Interval '1 hour' CHECK (expires_at > created_at),
+    finalized_at          TIMESTAMPTZ DEFAULT NULL CHECK (finalized_at > created_at),
     final_transcript      TEXT
 );
 
