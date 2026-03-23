@@ -3,6 +3,18 @@ import { supabase } from "./supabase";
 const BACKEND_BASE_URL =
   process.env.NEXT_PUBLIC_BACKEND_BASE_URL ?? "http://localhost:8000";
 
+export type ChunkMime = "audio/webm" | "audio/wav";
+
+export interface SendChunkPayload {
+  chunkIndex: number;
+  audioB64: string;
+  mime: ChunkMime;
+}
+
+export interface SendChunkResponse {
+  partial_text: string;
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const {
     data: { session },
@@ -53,18 +65,23 @@ export async function startSession(sessionId: string) {
 
 export async function sendChunk(
   sessionId: string,
-  chunkIndex: number,
-  audioB64: string
-) {
+  payload: SendChunkPayload
+): Promise<SendChunkResponse> {
   const res = await request(`/api/sessions/${sessionId}/chunks`, {
     method: "POST",
     body: JSON.stringify({
-      chunk_index: chunkIndex,
-      audio_b64: audioB64,
-      mime: "audio/wav",
+      chunk_index: payload.chunkIndex,
+      audio_b64: payload.audioB64,
+      mime: payload.mime,
     }),
   });
-  return res.json();
+
+  const data = (await res.json()) as SendChunkResponse & { detail?: string };
+  if (!res.ok) {
+    throw new Error(data.detail ?? `Chunk upload failed with status ${res.status}`);
+  }
+
+  return data;
 }
 
 export async function stopSession(sessionId: string) {

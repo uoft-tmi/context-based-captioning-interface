@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from "@supabase/auth-ui-shared";
@@ -10,13 +10,24 @@ export default function Home() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
 
-  // Check if user is already logged in
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      router.push("/session");
-    }
-    setChecking(false);
-  });
+  useEffect(() => {
+    let active = true;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!active) {
+        return;
+      }
+
+      if (session) {
+        router.push("/session");
+      }
+      setChecking(false);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   if (checking) {
     return (
