@@ -1,0 +1,13 @@
+.idea
+.vscode
+__pycache__
+.pytest_cache
+test.db
+log.txt
+Pipfile.lock
+env
+.venv
+
+
+# macOS
+.DS_Store
