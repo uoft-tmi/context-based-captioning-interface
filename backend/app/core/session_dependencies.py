@@ -14,7 +14,7 @@ async def get_session_if_active(
     session = await sessions_db.get_session(session_id, user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if not session.status == "active":
+    if not session.is_active:
         raise HTTPException(status_code=410, detail="Session ended")
     if session.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=410, detail="Session expired")

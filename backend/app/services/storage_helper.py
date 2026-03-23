@@ -1,6 +1,9 @@
 from typing import Optional
+from uuid import UUID
 
 from supabase import AsyncClient
+
+from app.database import sessions_db
 
 
 async def cleanup_storage(
@@ -14,21 +17,14 @@ async def cleanup_storage(
     """
     bucket = "session-pdfs"
 
-    if session_id:
-        path = f"{user_id}/{session_id}"
-        files = await supabase_client.storage.from_(bucket).list(path)
-        file_paths = [f"{path}/{file['name']}" for file in files if file.get("name")]
-        if file_paths:
+    path = f"{user_id}/{session_id}"
+    files = await supabase_client.storage.from_(bucket).list(path)
+    file_paths = [f"{path}/{file['name']}" for file in files if file.get("name")]
+    if file_paths:
+        try:
             await supabase_client.storage.from_(bucket).remove(file_paths)
-    else:
-        sessions = await supabase_client.storage.from_(bucket).list(user_id)
-        for session in sessions:
-            session_id = session.get("name")
-            if session_id:
-                path = f"{user_id}/{session_id}"
-                files = await supabase_client.storage.from_(bucket).list(path)
-                file_paths = [
-                    f"{path}/{file['name']}" for file in files if file.get("name")
-                ]
-                if file_paths:
-                    await supabase_client.storage.from_(bucket).remove(file_paths)
+            await sessions_db.delete_all_notes(
+                session_id=UUID(session_id), user_id=UUID(user_id)
+            )
+        except Exception as e:
+            print(f"Error deleting files from storage: {e}")

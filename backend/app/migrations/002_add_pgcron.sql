@@ -5,8 +5,8 @@ SELECT cron.schedule(
     '*/5 * * * *',
     $$
         UPDATE sessions 
-        SET status = 'finalized', updated_at = NOW()
-        WHERE status = 'active'
+        SET  is_active = false, finalized_at = NOW(), error = 'Session expired'
+        WHERE is_active = true
         AND expires_at < NOW();
     $$
 );

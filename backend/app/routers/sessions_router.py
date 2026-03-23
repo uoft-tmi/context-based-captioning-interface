@@ -13,11 +13,8 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 async def create_session(
     body: CreateSessionRequest,
     user_id=Depends(get_user_id),
-    supabase_client=Depends(get_supabase_client),
 ):
-    return await session_service.create_session(
-        user_id=user_id, mode=body.mode, supabase_client=supabase_client
-    )
+    return await session_service.create_session(user_id=user_id, mode=body.mode)
 
 
 @router.get("")
@@ -38,11 +35,9 @@ async def get_session(session_id: str, user_id=Depends(get_user_id)):
 @router.get("/{session_id}/notes")
 async def get_session_note(
     session=Depends(get_session_if_active),
-    supabase_client=Depends(get_supabase_client),
 ):
     return await session_service.get_notes(
         session=session,
-        supabase_client=supabase_client,
     )
 
 
@@ -59,7 +54,7 @@ async def upload_session_note(
     )
 
 
-@router.delete("/{session_id}/notes")
+@router.delete("/{session_id}/notes/{filename}")
 async def delete_notes(
     filename: str,
     session=Depends(get_session_if_active),
@@ -95,15 +90,8 @@ async def end_session(
     )
 
 
-@router.post("/{session_id}/error")
-async def mark_session_error(session_id: str, user_id=Depends(get_user_id)):
-    return await session_service.mark_session_error(
-        session_id=session_id, user_id=user_id
-    )
-
-
 @router.get("/{session_id}/download")
 async def download_session_pdf(session_id: str, user_id=Depends(get_user_id)):
-    return await session_service.download_session_pdf(
+    return await session_service.download_session_transcript(
         session_id=session_id, user_id=user_id
     )
