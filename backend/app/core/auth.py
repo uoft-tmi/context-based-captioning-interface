@@ -25,6 +25,15 @@ def get_payload(token: str) -> dict:
     return payload
 
 
+def verify_jwt(token: str) -> str:
+    """Verify JWT and return user ID. Raise HTTPException if invalid."""
+    payload = get_payload(token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise ValueError("User ID not found in token")
+    return user_id
+
+
 def get_current_user(
     cred: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> dict:

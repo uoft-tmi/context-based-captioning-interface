@@ -3,11 +3,13 @@ from uuid import UUID
 
 from supabase import AsyncClient
 
-from app.database import sessions_db
+from app.core.db_dependencies import DBPool
+from app.database import notes_db
 
 
 async def cleanup_storage(
     user_id: str,
+    db: DBPool,
     supabase_client: AsyncClient,
     session_id: Optional[str] = None,
 ) -> None:
@@ -23,8 +25,8 @@ async def cleanup_storage(
     if file_paths:
         try:
             await supabase_client.storage.from_(bucket).remove(file_paths)
-            await sessions_db.delete_all_notes(
-                session_id=UUID(session_id), user_id=UUID(user_id)
+            await notes_db.delete_all_notes(
+                db=db, session_id=UUID(session_id), user_id=UUID(user_id)
             )
         except Exception as e:
             print(f"Error deleting files from storage: {e}")

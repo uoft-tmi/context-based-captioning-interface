@@ -4,9 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import Settings, get_settings
-from app.database.pool import close_pool, create_pool
-from app.database.supabase_client import init_supabase_client
-from app.routers import sessions_router, stream_router
+from app.core.pool import close_pool, create_pool
+from app.core.supabase_client import init_supabase_client
+from app.routers import audio_router, sessions_router
 
 
 @asynccontextmanager
@@ -22,6 +22,7 @@ app = FastAPI(
     title="Context-Aware Lecture Captioning API", version="0.1.0", lifespan=lifespan
 )
 
+
 origins = ["https://localhost:3000"]
 
 app.add_middleware(
@@ -33,7 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(sessions_router.router)
-app.include_router(stream_router.router)
+app.include_router(audio_router.router)
 
 
 @app.get("/health")
