@@ -1,10 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from asyncpg import Pool
-
 from app.core.config import get_settings
+from app.core.db_dependencies import DBPool
 from app.models.session import Session, SessionMode
 
 
@@ -25,13 +24,13 @@ def _row_to_session(row) -> Session:
 
 # ----------------- Session Management -----------------
 async def create_session(
-    db: Pool,
+    db: DBPool,
     user_id: str,
     mode: str,
 ) -> Session:
     async with db.acquire() as conn:
         _settings = get_settings()
-        current_time = datetime.now()
+        current_time = datetime.now(timezone.utc)
         row = await conn.fetchrow(
             """
             INSERT INTO sessions (user_id, mode, created_at, expires_at)
@@ -47,7 +46,7 @@ async def create_session(
     return _row_to_session(row)
 
 
-async def get_active_session(db: Pool, user_id: str) -> Optional[Session]:
+async def get_active_session(db: DBPool, user_id: str) -> Optional[Session]:
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -63,7 +62,7 @@ async def get_active_session(db: Pool, user_id: str) -> Optional[Session]:
     return _row_to_session(row) if row else None
 
 
-async def get_session(db: Pool, session_id: str, user_id: str) -> Optional[Session]:
+async def get_session(db: DBPool, session_id: str, user_id: str) -> Optional[Session]:
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -77,7 +76,7 @@ async def get_session(db: Pool, session_id: str, user_id: str) -> Optional[Sessi
     return _row_to_session(row) if row else None
 
 
-async def get_all_sessions(db: Pool, user_id: str) -> list[Session]:
+async def get_all_sessions(db: DBPool, user_id: str) -> list[Session]:
     async with db.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -87,15 +86,10 @@ async def get_all_sessions(db: Pool, user_id: str) -> list[Session]:
             """,
             UUID(user_id),
         )
-
-    result = []
-    for row in rows:
-        session: Session = _row_to_session(row)
-        result.append(session)
-    return result
+    return [_row_to_session(row) for row in rows]
 
 
-async def end_session(db: Pool, session_id: str, user_id: str) -> None:
+async def end_session(db: DBPool, session_id: str, user_id: str) -> None:
     async with db.acquire() as conn:
         await conn.execute(
             """
@@ -109,15 +103,28 @@ async def end_session(db: Pool, session_id: str, user_id: str) -> None:
 
 
 async def deactivate_sessions(
-    db: Pool, user_id: str, error: Optional[str] = None
+    db: DBPool, user_id: str, error: Optional[str] = None
 ) -> None:
     async with db.acquire() as conn:
         await conn.execute(
             """
             UPDATE sessions
             SET is_active = FALSE, finalized_at = NOW(), error = $2
-            WHERE user_id = $1 AND is_active = FALSE
+            WHERE user_id = $1 AND is_active = TRUE
             """,
             UUID(user_id),
             error,
+        )
+
+
+async def slide_expiry(db: DBPool, session_id: str) -> None:
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE sessions
+            SET expires_at = NOW() + INTERVAL '1 second' * $2
+            WHERE id = $1
+            """,
+            UUID(session_id),
+            get_settings().EXPIRY_SLIDE_SECONDS,
         )

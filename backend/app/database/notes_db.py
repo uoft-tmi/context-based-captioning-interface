@@ -1,12 +1,12 @@
 from typing import Optional
 from uuid import UUID
 
-from asyncpg import Pool
+from app.core.db_dependencies import DBPool
 
 
 # ----------------- Session Notes -----------------
 async def save_note(
-    db: Pool,
+    db: DBPool,
     session_id: UUID,
     user_id: UUID,
     filename: str,
@@ -26,7 +26,7 @@ async def save_note(
 
 
 async def get_note(
-    db: Pool, session_id: UUID, user_id: UUID, filename: str
+    db: DBPool, session_id: UUID, user_id: UUID, filename: str
 ) -> Optional[str]:
     async with db.acquire() as conn:
         row = await conn.fetchrow(
@@ -42,7 +42,7 @@ async def get_note(
     return row["storage_key"] if row else None
 
 
-async def list_notes(db: Pool, session_id: UUID, user_id: UUID) -> list[str]:
+async def list_notes(db: DBPool, session_id: UUID, user_id: UUID) -> list[str]:
     async with db.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -56,7 +56,9 @@ async def list_notes(db: Pool, session_id: UUID, user_id: UUID) -> list[str]:
     return [row["filename"] for row in rows]
 
 
-async def delete_note(db: Pool, session_id: UUID, user_id: UUID, filename: str) -> None:
+async def delete_note(
+    db: DBPool, session_id: UUID, user_id: UUID, filename: str
+) -> None:
     async with db.acquire() as conn:
         await conn.execute(
             """
@@ -69,7 +71,7 @@ async def delete_note(db: Pool, session_id: UUID, user_id: UUID, filename: str) 
         )
 
 
-async def delete_all_notes(db: Pool, session_id: UUID, user_id: UUID) -> None:
+async def delete_all_notes(db: DBPool, session_id: UUID, user_id: UUID) -> None:
     async with db.acquire() as conn:
         await conn.execute(
             """
@@ -81,7 +83,7 @@ async def delete_all_notes(db: Pool, session_id: UUID, user_id: UUID) -> None:
         )
 
 
-async def count_notes(db: Pool, session_id: UUID) -> int:
+async def count_notes(db: DBPool, session_id: UUID) -> int:
     async with db.acquire() as conn:
         row = await conn.fetchrow(
             """

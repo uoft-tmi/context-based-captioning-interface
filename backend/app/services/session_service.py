@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.core.db_dependencies import DBPool
 from app.database import notes_db, sessions_db
 from app.models.session import Session, SessionMode
-from app.services.storage_helper import cleanup_storage
+from app.utils.storage_helper import cleanup_storage
 
 _settings = get_settings()
 
@@ -226,3 +226,10 @@ async def download_session_transcript(
     db: DBPool,
 ) -> dict:
     return {"transcript": "Transcript download not implemented yet"}
+
+
+async def slide_expiry(db: DBPool, session_id: str):
+    try:
+        await sessions_db.slide_expiry(db=db, session_id=session_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
