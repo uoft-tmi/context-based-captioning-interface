@@ -2,202 +2,175 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import { useRouter } from "next/navigation";
+import { fetchWithAuth } from "@/lib/api-client";
+import NotesUpload from "@/components/notes-upload";
 
-export default function SessionDashboard() {
-  const router = useRouter();
-  const [inputValue, setInputValue] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [message, setMessage] = useState("");
-  const [user, setUser] = useState<any>(null);
-  const [captions, setCaptions] = useState<{id: string, content: string, created_at: string}[]>([]);
+type SessionState =
+  | "INIT"
+  | "NOTES_PROCESSING"
+  | "READY"
+  | "STREAMING"
+  | "FINALIZING"
+  | "COMPLETE"
+  | "ERROR";
 
-  // Check session and listen for auth changes
+export default function SessionPage() {
+  const [sessionState, setSessionState] = useState<SessionState>("INIT");
+  const [mode, setMode] = useState<"baseline" | "context" | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Magic to fix the Chrome Back Button! By listening to popstate, we update the React state internally.
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.push("/");
-      } else {
-        setUser(session.user);
-        fetchCaptions();
-      }
-    });
+    const handlePopState = () => {
+      const step = new URLSearchParams(window.location.search).get("step") || "INIT";
+      setSessionState(step as SessionState);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        router.push("/");
-      } else {
-        setUser(session.user);
-        fetchCaptions();
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [router]);
-
-  const fetchCaptions = async () => {
-    const { data, error } = await supabase
-      .from('captions')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(6);
+  // Update React state AND automatically push it to the URL history so the Back Button works perfectly!
+  const updateSessionState = (newState: SessionState) => {
+    setSessionState(newState);
     
-    if (data) setCaptions(data);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputValue.trim() || !user) return;
-    
-    setIsSubmitting(true);
-    setMessage("");
-
-    try {
-      const { data, error } = await supabase
-        .from("captions")
-        .insert([
-          { 
-            content: inputValue,
-            user_id: user.id 
-          }
-        ]);
-
-      if (error) throw error;
-      
-      setInputValue("");
-      fetchCaptions(); // Refresh the list dynamically!
-    } catch (error: any) {
-      console.error("Error saving data:", error);
-      setMessage(`Error: ${error.message}`);
-    } finally {
-      setIsSubmitting(false);
+    // Only push state if not already at INIT to avoid useless loops
+    if (newState === "INIT") {
+       window.history.pushState(null, "", window.location.pathname);
+    } else {
+       window.history.pushState(null, "", `?step=${newState}`);
     }
   };
 
-  if (!user) return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-dynamic">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--brand)] border-t-transparent"></div>
-    </div>
-  );
+  const handleCreateSession = async (selectedMode: "baseline" | "context") => {
+    setErrorMsg(null);
+    setIsCreating(true);
+    setMode(selectedMode);
+    
+    try {
+      const res = await fetchWithAuth("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ mode: selectedMode }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to create session: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      setSessionId(data.session_id);
+
+      if (selectedMode === "context") {
+        updateSessionState("NOTES_PROCESSING");
+      } else {
+        updateSessionState("READY");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || "An error occurred while creating the session.");
+      updateSessionState("ERROR");
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-dynamic p-4 sm:p-6 lg:p-8">
-      {/* Top Navigation Bar */}
-      <header className="w-full max-w-7xl mx-auto flex items-center justify-between mb-8 glass-panel px-6 py-4 rounded-2xl relative z-20">
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-[var(--brand)] to-[var(--brand-accent)] flex items-center justify-center text-white font-bold text-xl shadow-lg">
-            C
-          </div>
-          <h1 className="text-xl font-bold tracking-tight text-[var(--foreground)] hidden sm:block">
-            Caption Workspace
-          </h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="hidden sm:flex flex-col text-right">
-            <span className="text-sm font-semibold text-[var(--foreground)]">{user.email}</span>
-            <span className="text-xs text-[var(--text-secondary)]">Active Session</span>
-          </div>
-          <div className="h-8 w-px bg-[var(--card-border)] hidden sm:block"></div>
-          <button 
-            onClick={() => supabase.auth.signOut()}
-            className="px-4 py-2 rounded-lg text-sm font-semibold text-[var(--text-secondary)] hover:text-white hover:bg-black/80 dark:hover:bg-white/10 transition-all duration-300"
-          >
-            Sign Out
-          </button>
-        </div>
-      </header>
+    <div className="glass-panel w-full max-w-2xl p-8 sm:p-12 space-y-8 relative overflow-hidden">
+      {/* Decorative elements */}
+      <div className="absolute top-0 right-0 -mr-12 -mt-12 w-48 h-48 rounded-full bg-[var(--brand)] opacity-5 blur-3xl"></div>
+      <div className="absolute bottom-0 left-0 -ml-12 -mb-12 w-48 h-48 rounded-full bg-[var(--brand-accent)] opacity-5 blur-3xl"></div>
 
-      {/* Main Content Area */}
-      <main className="w-full max-w-7xl mx-auto flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
-        
-        {/* Left Column: Input Control */}
-        <div className="lg:col-span-5 flex flex-col gap-6">
-          <div className="glass-panel p-6 sm:p-8 h-full flex flex-col relative overflow-hidden group shadow-xl">
-            <div className="absolute -top-12 -left-12 w-32 h-32 rounded-full bg-[var(--brand)] opacity-10 blur-2xl group-hover:opacity-20 transition-opacity duration-700"></div>
-            
-            <h2 className="text-2xl font-bold mb-2 text-[var(--foreground)] tracking-tight">Add Context</h2>
-            <p className="text-sm text-[var(--text-secondary)] mb-6">
-              Enter specialized jargon, speaker names, or exact lecture notes to improve captioning accuracy.
+      <div className="relative z-10 w-full">
+        {sessionState === "INIT" && (
+          <div className="space-y-6 text-center">
+            <h2 className="text-2xl font-bold text-[var(--foreground)]">New Session</h2>
+            <p className="text-[var(--text-secondary)]">
+              Select a captioning mode to begin. Baseline is standard transcription. Context mode uses uploaded notes to improve domain-specific accuracy.
             </p>
             
-            <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-5">
-              <div className="flex-1 flex flex-col min-h-[200px]">
-                <textarea
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  disabled={isSubmitting}
-                  className="flex-1 w-full p-5 rounded-2xl border border-[var(--input-border)] bg-[var(--input-bg)] text-[var(--text-primary)] focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)] focus:ring-opacity-50 outline-none resize-none transition-all shadow-inner text-lg leading-relaxed"
-                  placeholder="E.g., The protagonist of this novel is Raskolnikov..."
-                  required
-                />
-              </div>
-
-              {message && (
-                <div className={`p-3 rounded-lg text-sm font-medium ${message.includes("Error") ? "bg-red-50 text-red-600 border border-red-100" : "bg-green-50 text-green-600 border border-green-100"}`}>
-                  {message}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
+              <button
+                onClick={() => handleCreateSession("baseline")}
+                disabled={isCreating}
+                className="flex flex-col items-center justify-center p-6 border-2 border-[var(--input-border)] rounded-2xl hover:border-[var(--brand)] hover:shadow-md transition-all group bg-[var(--input-bg)] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center mb-4 group-hover:bg-blue-50 transition-colors">
+                  <span className="text-2xl">🎙️</span>
                 </div>
-              )}
+                <h3 className="font-semibold text-lg">Baseline</h3>
+                <p className="text-sm text-[var(--text-secondary)] mt-2">Standard AI captioning without extra context.</p>
+              </button>
 
               <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-[var(--brand)] to-[var(--brand-accent)] text-white font-bold text-lg hover:-translate-y-1 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:hover:translate-y-0 transition-all duration-300 ease-out"
+                onClick={() => handleCreateSession("context")}
+                disabled={isCreating}
+                className="flex flex-col items-center justify-center p-6 border-2 border-[var(--input-border)] rounded-2xl hover:border-[var(--brand)] hover:shadow-md transition-all group bg-[var(--input-bg)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? "Processing..." : "Inject Context"}
-              </button>
-            </form>
-          </div>
-        </div>
-
-        {/* Right Column: Live Data feed */}
-        <div className="lg:col-span-7 flex flex-col gap-6">
-          <div className="glass-panel p-6 sm:p-8 h-full flex flex-col shadow-xl">
-            <div className="flex items-center justify-between mb-6 border-b border-[var(--card-border)] pb-4">
-              <h2 className="text-2xl font-bold text-[var(--foreground)] tracking-tight flex items-center gap-3">
-                <span className="relative flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                </span>
-                Active Database Flow
-              </h2>
-              <span className="text-xs font-bold uppercase tracking-wider text-[var(--brand)] bg-[var(--brand)]/10 px-3 py-1.5 rounded-full">
-                Live Server
-              </span>
-            </div>
-
-            <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-2 pb-4">
-              {captions.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-[var(--text-secondary)] opacity-50 space-y-4">
-                  <div className="w-16 h-16 rounded-full border-2 border-dashed border-[var(--text-secondary)] flex items-center justify-center">
-                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                  </div>
-                  <p>Database is waiting for notes...</p>
+                <div className="h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center mb-4 group-hover:bg-blue-50 transition-colors">
+                  <span className="text-2xl">📚</span>
                 </div>
-              ) : (
-                captions.map((caption) => (
-                  <div key={caption.id} className="p-5 rounded-2xl bg-[var(--input-bg)] border border-[var(--input-border)] shadow-sm hover:shadow-md transition-all duration-300 transform hover:-translate-x-1 group">
-                    <p className="text-[var(--text-primary)] font-medium leading-relaxed mb-3 text-lg">
-                      {caption.content}
-                    </p>
-                    <div className="flex items-center justify-between text-xs text-[var(--text-secondary)] font-medium">
-                      <span className="truncate max-w-[200px] font-mono bg-[var(--background)] px-2 py-1 rounded-md border border-[var(--input-border)] shadow-inner">
-                        id: {caption.id.substring(0, 8)}
-                      </span>
-                      <span>
-                        {new Date(caption.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
+                <h3 className="font-semibold text-lg">Context-Aware</h3>
+                <p className="text-sm text-[var(--text-secondary)] mt-2">Upload notes for improved accuracy.</p>
+              </button>
+            </div>
+            {isCreating && <p className="text-sm text-[var(--brand)] mt-4 animate-pulse">Initializing session...</p>}
+          </div>
+        )}
+
+        {sessionState === "NOTES_PROCESSING" && sessionId && (
+          <NotesUpload 
+            sessionId={sessionId}
+            onSuccess={() => updateSessionState("READY")}
+            onSkip={() => updateSessionState("READY")}
+            onBack={() => updateSessionState("INIT")}
+          />
+        )}
+
+        {sessionState === "READY" && (
+          <div className="space-y-6 text-center">
+            <h2 className="text-2xl font-bold text-[var(--foreground)]">Ready to Start</h2>
+             <p className="text-[var(--text-secondary)]">
+              Session is initialized and ready.
+            </p>
+            <button className="px-8 py-3 bg-[var(--brand)] text-[var(--brand-text)] font-bold rounded-full shadow hover:bg-[var(--brand-accent)] transition-colors mt-8 mx-auto block">
+              Start Recording
+            </button>
+
+            <div className="mt-8 flex justify-center gap-4">
+               <button 
+                  onClick={() => updateSessionState("INIT")}
+                  className="text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--foreground)] border border-[var(--input-border)] px-6 py-2 rounded-full hover:bg-[var(--card-bg)] transition-colors"
+                >
+                  ← Cancel Session
+                </button>
+               {mode === "context" && (
+                 <button 
+                  onClick={() => updateSessionState("NOTES_PROCESSING")}
+                  className="text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--foreground)] border border-[var(--input-border)] px-6 py-2 rounded-full hover:bg-[var(--card-bg)] transition-colors"
+                >
+                  Edit PDF Notes
+                </button>
+               )}
             </div>
           </div>
-        </div>
-      </main>
+        )}
+
+        {sessionState === "ERROR" && (
+          <div className="space-y-6 text-center text-red-600">
+            <h2 className="text-2xl font-bold">Error</h2>
+             <p className="text-sm bg-red-50 p-4 rounded-xl border border-red-200">
+              {errorMsg || "An unknown error occurred."}
+            </p>
+            <button 
+              onClick={() => updateSessionState("INIT")}
+              className="px-8 py-3 bg-red-600 text-white font-bold rounded-full shadow hover:bg-red-700 transition-colors mt-8 mx-auto block"
+            >
+              Try Again
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
