@@ -27,22 +27,48 @@ The frontend never calls the model server directly. All model access is proxied 
 │   │   ├── supabase.ts        # Supabase browser client
 │   │   └── api.ts             # Backend API wrapper
 │   └── .env.local.example
-├── backend/                   # FastAPI app
-│   ├── main.py                # App entrypoint + CORS
-│   ├── config.py              # Settings from env vars
-│   ├── routers/
-│   │   └── sessions.py        # All session endpoints
-│   ├── services/
-│   │   ├── model_client.py    # Model server HTTP client
-│   │   └── supabase_client.py # Supabase admin client
-│   ├── middleware/
-│   │   └── auth.py            # JWT verification
-│   ├── Dockerfile
-│   └── .env.example
-├── supabase/
-│   └── migrations/            # SQL migrations
-│       ├── 001_create_caption_sessions.sql
-│       └── 002_create_storage_buckets.sql
+backend
+├── app
+│   ├── clients
+│   │   ├── caption_model_client.py
+│   │   ├── pool.py
+│   │   └── supabase_client.py
+│   ├── core
+│   │   ├── auth.py
+│   │   ├── config.py
+│   │   ├── db_dependencies.py
+│   │   ├── dependencies.py
+│   │   ├── exceptions.py
+│   │   └── session_dependencies.py
+│   ├── database
+│   │   ├── notes_db.py
+│   │   └── sessions_db.py
+│   ├── migrations
+│   │   ├── 001_create_sessions.sql
+│   │   ├── 002_add_pgcron.sql
+│   │   ├── 003_add_partial_index.sql
+│   │   └── 004_session_notes.sql
+│   ├── models
+│   │   ├── caption_model.py
+│   │   └── session.py
+│   ├── routers
+│   │   ├── audio_router.py
+│   │   └── sessions_router.py
+│   ├── services
+│   │   ├── caption_model_service.py
+│   │   └── session_service.py
+│   └── utils
+│       └── storage_helper.py
+├── Dockerfile
+├── main.py
+├── pytest.ini
+├── .env.example
+├── requirements-dev.txt
+├── requirements.txt
+└── tests
+    └── services
+        ├── test_caption_model_service.py
+        └── test_session_service.py
 └── CLAUDE.md                  # Full project spec
 ```
 
@@ -85,19 +111,25 @@ The backend runs on [http://localhost:8000](http://localhost:8000). API docs are
 
 ### Database
 
-Run the SQL migrations in `supabase/migrations/` against your Supabase project (via the SQL editor or Supabase CLI).
+Run the SQL migrations in `backend/app/migrations/` against your Supabase project (via the SQL editor or Supabase CLI).
 
 ## API Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/sessions` | Create session (baseline or context mode) |
-| POST | `/api/sessions/{id}/notes` | Upload PDF notes (context mode) |
-| POST | `/api/sessions/{id}/start` | Explicitly start session (optional) |
-| POST | `/api/sessions/{id}/chunks` | Send audio chunk for transcription |
-| POST | `/api/sessions/{id}/stop` | Finalize session, get transcript |
-| GET | `/api/sessions/{id}` | Get session status |
-| GET | `/api/sessions/{id}/download` | Download transcript |
+| Method     | Endpoint                                           | Description                          |
+|------------|----------------------------------------------------|--------------------------------------|
+| GET        | `/api/sessions`                                    | Get All Sessions                     |
+| POST       | `/api/sessions`                                    | Create Session                       |
+| GET        | `/api/sessions/active`                             | Get Active Session                   |
+| GET        | `/api/sessions/{session_id}`                       | Get Session                          |
+| GET        | `/api/sessions/{session_id}/notes`                 | List Notes                           |
+| POST       | `/api/sessions/{session_id}/notes`                 | Upload Note                          |
+| DELETE     | `/api/sessions/{session_id}/notes/{filename}`      | Delete Note                          |
+| GET        | `/api/sessions/{session_id}/notes/{filename}`      | Download Note                        |
+| POST       | `/api/sessions/{session_id}/end`                   | End Session                          |
+| POST       | `/api/sessions/{session_id}/error`                 | Mark Session Error                   |
+| GET        | `/api/sessions/{session_id}/download`              | Download Session Pdf                 |
+| GET        | `/health`                                         | Health Check                         |
+| WEBSOCKET  | `/ws/sessions/{session_id}/stream`                 | Stream Audio & Receive Live Captions |
 
 ## How It Works
 
