@@ -24,9 +24,6 @@ class Settings(BaseSettings):
     MODEL_BASE_URL: str = ""
     MODEL_API_KEY: str = ""
 
-    GOOGLE_CLIENT_ID: str = ""
-    GOOGLE_CLIENT_SECRET: str = ""
-
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

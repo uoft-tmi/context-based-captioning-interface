@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     async with httpx.AsyncClient(base_url=settings.MODEL_BASE_URL) as client:
         app.state.model_client = ModelClient(client)
         yield
+    yield
     await close_pool()
 
 
