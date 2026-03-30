@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.clients.caption_model_client import ModelClient
+from app.clients.pool import close_pool, create_pool
+from app.clients.supabase_client import init_supabase_client
 from app.core.config import Settings, get_settings
-from app.core.pool import close_pool, create_pool
-from app.core.supabase_client import init_supabase_client
 from app.routers import audio_router, sessions_router
 
 
@@ -14,7 +16,9 @@ async def lifespan(app: FastAPI):
     settings: Settings = get_settings()
     await create_pool(settings.POSTGRES_URL)
     await init_supabase_client()
-    yield
+    async with httpx.AsyncClient(base_url=settings.MODEL_BASE_URL) as client:
+        app.state.model_client = ModelClient(client)
+        yield
     await close_pool()
 
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import Depends, HTTPException
 
@@ -9,9 +10,9 @@ from app.models.session import Session
 
 
 async def get_session_if_active(
-    session_id: str,
+    session_id: UUID,
     db: DBPool,
-    user_id: str = Depends(get_user_id),
+    user_id: UUID = Depends(get_user_id),
 ) -> Session:
     session = await sessions_db.get_session(db, session_id, user_id)
     if not session:

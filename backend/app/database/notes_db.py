@@ -56,6 +56,25 @@ async def list_notes(db: DBPool, session_id: UUID, user_id: UUID) -> list[str]:
     return [row["filename"] for row in rows]
 
 
+async def list_note_storage_keys(
+    db: DBPool,
+    session_id: UUID,
+    user_id: UUID,
+) -> list[str]:
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT storage_key FROM session_notes
+            WHERE session_id = $1 AND user_id = $2
+            ORDER BY created_at ASC
+            """,
+            session_id,
+            user_id,
+        )
+
+    return [row["storage_key"] for row in rows]
+
+
 async def delete_note(
     db: DBPool, session_id: UUID, user_id: UUID, filename: str
 ) -> None:

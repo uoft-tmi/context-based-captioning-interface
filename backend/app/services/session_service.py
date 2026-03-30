@@ -1,5 +1,5 @@
 from typing import Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from asyncpg import UniqueViolationError
 from fastapi import HTTPException, UploadFile
@@ -15,7 +15,7 @@ from app.utils.storage_helper import cleanup_storage
 _settings = get_settings()
 
 
-async def create_session(db: DBPool, user_id: str, mode: SessionMode) -> Session:
+async def create_session(db: DBPool, user_id: UUID, mode: SessionMode) -> Session:
     try:
         await sessions_db.deactivate_sessions(db=db, user_id=user_id)
         return await sessions_db.create_session(
@@ -30,7 +30,7 @@ async def create_session(db: DBPool, user_id: str, mode: SessionMode) -> Session
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_active_session(db: DBPool, user_id: str) -> Optional[Session]:
+async def get_active_session(db: DBPool, user_id: UUID) -> Optional[Session]:
     try:
         return await sessions_db.get_active_session(db=db, user_id=user_id)
     except HTTPException:
@@ -41,8 +41,8 @@ async def get_active_session(db: DBPool, user_id: str) -> Optional[Session]:
 
 async def get_session(
     db: DBPool,
-    session_id: str,
-    user_id: str,
+    session_id: UUID,
+    user_id: UUID,
 ) -> Session:
     try:
         session = await sessions_db.get_session(
@@ -59,7 +59,7 @@ async def get_session(
 
 async def get_all_sessions(
     db: DBPool,
-    user_id: str,
+    user_id: UUID,
 ) -> list[Session]:
     try:
         return await sessions_db.get_all_sessions(db=db, user_id=user_id)
@@ -202,8 +202,8 @@ async def end_session(
     session: Session, supabase_client: AsyncClient, db: DBPool
 ) -> dict:
     try:
-        session_id = str(session.id)
-        user_id = str(session.user_id)
+        session_id = session.id
+        user_id = session.user_id
         await sessions_db.end_session(db=db, session_id=session_id, user_id=user_id)
 
         await cleanup_storage(
@@ -213,7 +213,7 @@ async def end_session(
             db=db,
         )
 
-        return {"message": "Session ended successfully", "session_id": session_id}
+        return {"message": "Session ended successfully", "session_id": str(session_id)}
     except HTTPException:
         raise
     except Exception as e:
@@ -221,14 +221,14 @@ async def end_session(
 
 
 async def download_session_transcript(
-    session_id: str,
-    user_id: str,
+    session_id: UUID,
+    user_id: UUID,
     db: DBPool,
 ) -> dict:
     return {"transcript": "Transcript download not implemented yet"}
 
 
-async def slide_expiry(db: DBPool, session_id: str):
+async def slide_expiry(db: DBPool, session_id: UUID):
     try:
         await sessions_db.slide_expiry(db=db, session_id=session_id)
     except Exception as e:

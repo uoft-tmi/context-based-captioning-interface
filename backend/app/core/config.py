@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     EXPIRY_SLIDE_SECONDS: int = 30
     MAX_PDF_SIZE: int = 10 * 1024 * 1024  # 10 MB
     MAX_NOTES_PER_SESSION: int = 3
+    CHUNK_TIMEOUT_SECONDS: int = 15
+    NOTES_TIMEOUT_SECONDS: int = 60
 
     # Model API
     MODEL_BASE_URL: str = ""

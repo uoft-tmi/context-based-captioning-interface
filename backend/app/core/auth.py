@@ -1,3 +1,5 @@
+from uuid import UUID
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -25,13 +27,13 @@ def get_payload(token: str) -> dict:
     return payload
 
 
-def verify_jwt(token: str) -> str:
+def verify_jwt(token: str) -> UUID:
     """Verify JWT and return user ID. Raise HTTPException if invalid."""
     payload = get_payload(token)
     user_id = payload.get("sub")
     if not user_id:
         raise ValueError("User ID not found in token")
-    return user_id
+    return UUID(user_id)
 
 
 def get_current_user(
@@ -54,7 +56,7 @@ def get_current_user(
         )
 
 
-def get_user_id(user: dict = Depends(get_current_user)) -> str:
+def get_user_id(user: dict = Depends(get_current_user)) -> UUID:
     """Dependency to extract user ID from the JWT token."""
     user_id = user.get("sub")
     if not user_id:
@@ -62,4 +64,4 @@ def get_user_id(user: dict = Depends(get_current_user)) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User ID not found in token",
         )
-    return user_id
+    return UUID(user_id)
