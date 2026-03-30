@@ -11,21 +11,16 @@ class SessionMode(str, Enum):
     baseline = "baseline"  # no context based captioning
 
 
-class SessionStatus(str, Enum):
-    active = "active"
-    finalized = "finalized"
-    expired = "error"
-
-
 class Session(BaseModel):
     id: UUID
     user_id: UUID
     mode: SessionMode
-    status: SessionStatus
+    is_active: bool
+    error: Optional[str] = None
     created_at: datetime
     expires_at: datetime
     finalized_at: Optional[datetime] = None
-    final_transcript: Optional[str] = None
+    transcript_key: Optional[str] = None
 
 
 class CreateSessionRequest(BaseModel):

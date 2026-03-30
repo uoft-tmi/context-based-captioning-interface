@@ -13,8 +13,16 @@ class Settings(BaseSettings):
 
     # Limits
     MAX_SESSION_DURATION_SECONDS: int = 3600  # 1 hour
+    SESSION_TIMEOUT_SECONDS: int = 30
+    EXPIRY_SLIDE_SECONDS: int = 30
     MAX_PDF_SIZE: int = 10 * 1024 * 1024  # 10 MB
     MAX_NOTES_PER_SESSION: int = 3
+    CHUNK_TIMEOUT_SECONDS: int = 15
+    NOTES_TIMEOUT_SECONDS: int = 60
+
+    # Model API
+    MODEL_BASE_URL: str = ""
+    MODEL_API_KEY: str = ""
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

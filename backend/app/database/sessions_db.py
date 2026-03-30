@@ -1,145 +1,136 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
 from app.core.config import get_settings
-from app.database.pool import get_pool
+from app.core.db_dependencies import DBPool
 from app.models.session import Session, SessionMode
 
 
+# ----------------- Helper Functions -----------------
 def _row_to_session(row) -> Session:
     return Session(
         id=row["id"],
         user_id=row["user_id"],
         mode=SessionMode(row["mode"]),
-        status=row["status"],
+        is_active=row["is_active"],
+        error=row["error"],
         created_at=row["created_at"],
         expires_at=row["expires_at"],
         finalized_at=row["finalized_at"],
-        final_transcript=row["final_transcript"],
+        transcript_key=row["transcript_key"],
     )
 
 
+# ----------------- Session Management -----------------
 async def create_session(
-    user_id: str,
+    db: DBPool,
+    user_id: UUID,
     mode: str,
 ) -> Session:
-    async with get_pool().acquire() as conn:
+    async with db.acquire() as conn:
         _settings = get_settings()
+        current_time = datetime.now(timezone.utc)
         row = await conn.fetchrow(
             """
             INSERT INTO sessions (user_id, mode, created_at, expires_at)
             VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
-            UUID(user_id),
+            user_id,
             mode,
-            datetime.now(),
-            datetime.now() + timedelta(seconds=_settings.MAX_SESSION_DURATION_SECONDS),
+            current_time,
+            current_time + timedelta(seconds=_settings.MAX_SESSION_DURATION_SECONDS),
         )
 
     return _row_to_session(row)
 
 
-async def get_active_session(user_id: str) -> Optional[Session]:
-    async with get_pool().acquire() as conn:
+async def get_active_session(db: DBPool, user_id: UUID) -> Optional[Session]:
+    async with db.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT * FROM sessions
-            WHERE user_id = $1 AND status = 'active'
+            WHERE user_id = $1 AND is_active = TRUE
             AND expires_at > NOW()
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            UUID(user_id),
+            user_id,
         )
 
     return _row_to_session(row) if row else None
 
 
-async def get_session(session_id: str, user_id: str) -> Optional[Session]:
-    async with get_pool().acquire() as conn:
+async def get_session(
+    db: DBPool,
+    session_id: UUID,
+    user_id: UUID,
+) -> Optional[Session]:
+    async with db.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT * FROM sessions
             WHERE id = $1 AND user_id = $2
             """,
-            UUID(session_id),
-            UUID(user_id),
+            session_id,
+            user_id,
         )
 
     return _row_to_session(row) if row else None
 
 
-async def get_all_sessions(user_id: str) -> list[Session]:
-    async with get_pool().acquire() as conn:
+async def get_all_sessions(db: DBPool, user_id: UUID) -> list[Session]:
+    async with db.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT * FROM sessions
             WHERE user_id = $1
             ORDER BY created_at DESC
             """,
-            UUID(user_id),
+            user_id,
         )
-
-    result = []
-    for row in rows:
-        session: Session = _row_to_session(row)
-        result.append(session)
-    return result
+    return [_row_to_session(row) for row in rows]
 
 
-async def update_session_note_urls(
-    session_id: str, user_id: str, note_urls: list[str]
-) -> Optional[Session]:
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE sessions
-            SET note_urls = $3
-            WHERE id = $1 AND user_id = $2
-            RETURNING *
-            """,
-            UUID(session_id),
-            UUID(user_id),
-            note_urls,
-        )
-        return _row_to_session(row) if row else None
-
-
-async def end_session(session_id: str, user_id: str) -> None:
-    async with get_pool().acquire() as conn:
+async def end_session(db: DBPool, session_id: UUID, user_id: UUID) -> None:
+    async with db.acquire() as conn:
         await conn.execute(
             """
             UPDATE sessions
-            SET status = 'finalized', finalized_at = NOW()
+            SET is_active = FALSE, finalized_at = NOW()
             WHERE id = $1 AND user_id = $2
             """,
-            UUID(session_id),
-            UUID(user_id),
+            session_id,
+            user_id,
         )
 
 
-async def mark_session_error(session_id: str, user_id: str) -> None:
-    async with get_pool().acquire() as conn:
+async def deactivate_sessions(
+    db: DBPool,
+    user_id: UUID,
+    error: Optional[str] = None,
+) -> None:
+    async with db.acquire() as conn:
         await conn.execute(
             """
             UPDATE sessions
-            SET status = 'error', finalized_at = NOW()
-            WHERE id = $1 AND user_id = $2
+            SET is_active = FALSE, finalized_at = NOW(), error = $2
+            WHERE user_id = $1 AND is_active = TRUE
             """,
-            UUID(session_id),
-            UUID(user_id),
+            user_id,
+            error,
         )
 
 
-async def deactivate_sessions(user_id: str) -> None:
-    async with get_pool().acquire() as conn:
+async def slide_expiry(db: DBPool, session_id: UUID) -> None:
+    async with db.acquire() as conn:
         await conn.execute(
             """
             UPDATE sessions
-            SET status = 'finalized', finalized_at = NOW()
-            WHERE user_id = $1 AND status = 'active'
+            SET expires_at = NOW() + INTERVAL '1 second' * $2
+            WHERE id = $1
             """,
-            UUID(user_id),
+            session_id,
+            get_settings().EXPIRY_SLIDE_SECONDS,
         )

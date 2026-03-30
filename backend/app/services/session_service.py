@@ -1,27 +1,25 @@
 from typing import Optional
+from uuid import UUID, uuid4
 
+from asyncpg import UniqueViolationError
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from supabase import AsyncClient
 
 from app.core.config import get_settings
-from app.database import sessions_db
+from app.core.db_dependencies import DBPool
+from app.database import notes_db, sessions_db
 from app.models.session import Session, SessionMode
-from app.services.storage_helper import cleanup_storage
+from app.utils.storage_helper import cleanup_storage
 
 _settings = get_settings()
 
 
-async def create_session(
-    user_id: str,
-    mode: SessionMode,
-    supabase_client: AsyncClient,
-) -> Session:
+async def create_session(db: DBPool, user_id: UUID, mode: SessionMode) -> Session:
     try:
-        await sessions_db.deactivate_sessions(user_id=user_id)
-        await cleanup_storage(user_id=user_id, supabase_client=supabase_client)
-
+        await sessions_db.deactivate_sessions(db=db, user_id=user_id)
         return await sessions_db.create_session(
+            db=db,
             user_id=user_id,
             mode=mode,
         )
@@ -32,11 +30,9 @@ async def create_session(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_active_session(
-    user_id: str,
-) -> Optional[Session]:
+async def get_active_session(db: DBPool, user_id: UUID) -> Optional[Session]:
     try:
-        return await sessions_db.get_active_session(user_id=user_id)
+        return await sessions_db.get_active_session(db=db, user_id=user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -44,11 +40,14 @@ async def get_active_session(
 
 
 async def get_session(
-    session_id: str,
-    user_id: str,
+    db: DBPool,
+    session_id: UUID,
+    user_id: UUID,
 ) -> Session:
     try:
-        session = await sessions_db.get_session(session_id=session_id, user_id=user_id)
+        session = await sessions_db.get_session(
+            db=db, session_id=session_id, user_id=user_id
+        )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         return session
@@ -59,24 +58,22 @@ async def get_session(
 
 
 async def get_all_sessions(
-    user_id: str,
+    db: DBPool,
+    user_id: UUID,
 ) -> list[Session]:
     try:
-        return await sessions_db.get_all_sessions(user_id=user_id)
+        return await sessions_db.get_all_sessions(db=db, user_id=user_id)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_notes(session: Session, supabase_client: AsyncClient) -> list[str]:
+async def get_notes(db: DBPool, session: Session) -> list[str]:
     try:
         session_id = session.id
         user_id = session.user_id
-        files = await supabase_client.storage.from_("session-pdfs").list(
-            f"{user_id}/{session_id}/"
-        )
-        return [file["name"] for file in files]
+        return await notes_db.list_notes(db=db, session_id=session_id, user_id=user_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -84,13 +81,20 @@ async def get_notes(session: Session, supabase_client: AsyncClient) -> list[str]
 
 
 async def download_note(
-    session: Session, filename: str, supabase_client: AsyncClient
+    session: Session, filename: str, supabase_client: AsyncClient, db: DBPool
 ) -> StreamingResponse:
     try:
         session_id = session.id
         user_id = session.user_id
+        file_key = await notes_db.get_note(
+            db=db, session_id=session_id, user_id=user_id, filename=filename
+        )
+
+        if not file_key:
+            raise HTTPException(status_code=404, detail=f"{filename} not found")
+
         note = await supabase_client.storage.from_("session-pdfs").download(
-            f"{user_id}/{session_id}/{filename}"
+            f"{user_id}/{session_id}/{file_key}"
         )
 
         if not note:
@@ -111,6 +115,7 @@ async def upload_note(
     file: UploadFile,
     session: Session,
     supabase_client: AsyncClient,
+    db: DBPool,
 ) -> dict:
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -125,8 +130,8 @@ async def upload_note(
     user_id = session.user_id
     path = f"{user_id}/{session_id}/"
 
-    files = await supabase_client.storage.from_("session-notes").list(path)
-    if len(files) >= _settings.MAX_NOTES_PER_SESSION:
+    count = await notes_db.count_notes(db=db, session_id=session_id)
+    if count >= _settings.MAX_NOTES_PER_SESSION:
         raise HTTPException(
             status_code=400, detail="Maximum number of notes for this session reached"
         )
@@ -138,13 +143,27 @@ async def upload_note(
         )
 
     try:
+        file_key = uuid4().hex + ".pdf"
+
+        await notes_db.save_note(
+            db=db,
+            session_id=session_id,
+            user_id=user_id,
+            filename=filename,
+            storage_key=file_key,
+        )
+
         await supabase_client.storage.from_("session-pdfs").upload(
-            (path + filename),
+            (path + file_key),
             contents,
             {"content-type": "application/pdf", "upsert": "true"},
         )
 
         return {"status": "processed"}
+    except UniqueViolationError:
+        raise HTTPException(
+            status_code=409, detail="A note with this filename already exists"
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -152,9 +171,7 @@ async def upload_note(
 
 
 async def delete_note(
-    filename: str,
-    session: Session,
-    supabase_client: AsyncClient,
+    filename: str, session: Session, supabase_client: AsyncClient, db: DBPool
 ):
     if not filename:
         raise HTTPException(status_code=400, detail="Filename is required")
@@ -162,9 +179,18 @@ async def delete_note(
     try:
         user_id = session.user_id
         session_id = session.id
-        await supabase_client.storage.from_("session-notes").remove(
-            [f"{user_id}/{session_id}/{filename}"]
+        file_key = await notes_db.get_note(
+            db=db, session_id=session_id, user_id=user_id, filename=filename
         )
+        if not file_key:
+            raise HTTPException(status_code=404, detail=f"{filename} not found")
+        await supabase_client.storage.from_("session-pdfs").remove(
+            [f"{user_id}/{session_id}/{file_key}"]
+        )
+        await notes_db.delete_note(
+            db=db, session_id=session_id, user_id=user_id, filename=filename
+        )
+
         return {"status": "deleted"}
     except HTTPException:
         raise
@@ -173,43 +199,37 @@ async def delete_note(
 
 
 async def end_session(
-    session: Session,
-    supabase_client: AsyncClient,
+    session: Session, supabase_client: AsyncClient, db: DBPool
 ) -> dict:
     try:
-        session_id = str(session.id)
-        user_id = str(session.user_id)
-        await sessions_db.end_session(session_id=session_id, user_id=user_id)
+        session_id = session.id
+        user_id = session.user_id
+        await sessions_db.end_session(db=db, session_id=session_id, user_id=user_id)
 
         await cleanup_storage(
-            user_id=user_id, session_id=session_id, supabase_client=supabase_client
-        )
-
-        return {"message": "Session ended successfully", "session_id": session_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def mark_session_error(
-    session_id: str,
-    user_id: str,
-) -> dict:
-    try:
-        await sessions_db.mark_session_error(
-            session_id=session_id,
             user_id=user_id,
+            session_id=session_id,
+            supabase_client=supabase_client,
+            db=db,
         )
-        return {"message": "Session marked as error successfully"}
+
+        return {"message": "Session ended successfully", "session_id": str(session_id)}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def download_session_pdf(
-    session_id: str,
-    user_id: str,
+async def download_session_transcript(
+    session_id: UUID,
+    user_id: UUID,
+    db: DBPool,
 ) -> dict:
-    return {}
+    return {"transcript": "Transcript download not implemented yet"}
+
+
+async def slide_expiry(db: DBPool, session_id: UUID):
+    try:
+        await sessions_db.slide_expiry(db=db, session_id=session_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
