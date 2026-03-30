@@ -165,15 +165,24 @@ Sessions are limited to 5 minutes max, with 1 active session per user.
 
 ### Backend
 
-| Variable | Description |
-|----------|-------------|
-| `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only) |
-| `SUPABASE_JWT_JWKS_URL` | Supabase JWKS URL for JWT verification |
-| `MODEL_BASE_URL` | Model server endpoint URL |
-| `MODEL_API_KEY` | API key for model server auth |
-| `MAX_SESSION_SECONDS` | Max session duration (default: 300) |
-| `MAX_CONCURRENT_SESSIONS` | Max concurrent sessions (default: 20) |
+| Variable                    | Description                                                 |
+| --------------------------- | ----------------------------------------------------------- |
+| `SUPABASE_URL`              | Supabase project URL                                        |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only; keep secret)   |
+| `SUPABASE_JWT_JWKS_URL`     | Supabase JWKS URL used to verify JWTs                       |
+| `SUPABASE_AUDIENCE`         | Expected audience (`aud`) claim for Supabase JWTs           |
+| `POSTGRES_URL`              | PostgreSQL connection string                                |
+| `MODEL_BASE_URL`            | Base URL of the model server                                |
+| `MODEL_API_KEY`             | API key for authenticating with the model server            |
+| `MAX_SESSION_SECONDS`       | Maximum session duration in seconds (default: 3600)         |
+| `MAX_CONCURRENT_SESSIONS`   | Maximum number of concurrent sessions allowed (default: 20) |
+| `SESSION_TIMEOUT_SECONDS`   | Inactivity timeout before a session is considered idle      |
+| `EXPIRY_SLIDE_SECONDS`      | Time window to extend session expiry on activity            |
+| `MAX_PDF_SIZE`              | Maximum allowed PDF upload size in bytes (default: 10MB)    |
+| `MAX_NOTES_PER_SESSION`     | Maximum number of notes allowed per session                 |
+| `CHUNK_TIMEOUT_SECONDS`     | Timeout for processing individual chunks                    |
+| `NOTES_TIMEOUT_SECONDS`     | Timeout for processing notes                                |
+
 
 ## Deployment
 
