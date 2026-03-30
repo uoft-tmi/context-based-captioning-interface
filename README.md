@@ -19,53 +19,68 @@ The frontend never calls the model server directly. All model access is proxied 
 
 ```
 /
-├── frontend/                  # Next.js app
+├── frontend/                      # Next.js app
 │   ├── app/
-│   │   ├── page.tsx           # Login page (Supabase Auth UI)
-│   │   └── session/page.tsx   # Session page (record, captions, download)
+│   │   ├── page.tsx              # Login page (Supabase Auth UI)
+│   │   └── session/
+│   │       └── page.tsx          # Session page (record, captions, download)
 │   ├── lib/
-│   │   ├── supabase.ts        # Supabase browser client
-│   │   └── api.ts             # Backend API wrapper
-│   └── .env.local.example
-backend
-├── app
-│   ├── clients
-│   │   ├── caption_model_client.py
-│   │   ├── pool.py
-│   │   └── supabase_client.py
-│   ├── core
-│   │   ├── auth.py
-│   │   ├── config.py
-│   │   ├── db_dependencies.py
-│   │   ├── dependencies.py
-│   │   ├── exceptions.py
-│   │   └── session_dependencies.py
-│   ├── database
-│   │   ├── notes_db.py
-│   │   └── sessions_db.py
-│   ├── migrations
-│   ├── models
-│   │   ├── caption_model.py
-│   │   └── session.py
-│   ├── routers
-│   │   ├── audio_router.py
-│   │   └── sessions_router.py
-│   ├── services
-│   │   ├── caption_model_service.py
-│   │   └── session_service.py
-│   └── utils
-│       └── storage_helper.py
-├── Dockerfile
-├── main.py
-├── pytest.ini
-├── .env.example
-├── requirements-dev.txt
-├── requirements.txt
-└── tests
-    └── services
-        ├── test_caption_model_service.py
-        └── test_session_service.py
-└── CLAUDE.md                  # Full project spec
+│   │   ├── supabase.ts           # Supabase browser client
+│   │   └── api.ts                # Backend API wrapper
+│   ├── .env.local.example
+│   └── package.json
+
+├── backend/                      # FastAPI backend
+│   ├── app/
+│   │   ├── clients/
+│   │   │   ├── caption_model_client.py
+│   │   │   ├── pool.py
+│   │   │   └── supabase_client.py
+│   │   │
+│   │   ├── core/
+│   │   │   ├── auth.py
+│   │   │   ├── config.py
+│   │   │   ├── db_dependencies.py
+│   │   │   ├── dependencies.py
+│   │   │   ├── exceptions.py
+│   │   │   └── session_dependencies.py
+│   │   │
+│   │   ├── database/
+│   │   │   ├── notes_db.py
+│   │   │   └── sessions_db.py
+│   │   │
+│   │   ├── models/
+│   │   │   ├── caption_model.py
+│   │   │   └── session.py
+│   │   │
+│   │   ├── routers/
+│   │   │   ├── audio_router.py
+│   │   │   └── sessions_router.py
+│   │   │
+│   │   ├── services/
+│   │   │   ├── caption_model_service.py
+│   │   │   └── session_service.py
+│   │   │
+│   │   ├── utils/
+│   │   │   └── storage_helper.py
+│   │   │
+│   │   └── __init__.py
+│   │
+│   ├── migrations/
+│   ├── tests/
+│   │   └── services/
+│   │       ├── test_caption_model_service.py
+│   │       └── test_session_service.py
+│   │
+│   ├── main.py
+│   ├── pytest.ini
+│   ├── requirements.txt
+│   ├── requirements-dev.txt
+│   ├── .env.example
+│   └── Dockerfile
+
+├── CLAUDE.md                     # Full project spec
+└── README.md
 ```
 
 ## Getting Started
