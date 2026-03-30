@@ -44,10 +44,6 @@ backend
 │   │   ├── notes_db.py
 │   │   └── sessions_db.py
 │   ├── migrations
-│   │   ├── 001_create_sessions.sql
-│   │   ├── 002_add_pgcron.sql
-│   │   ├── 003_add_partial_index.sql
-│   │   └── 004_session_notes.sql
 │   ├── models
 │   │   ├── caption_model.py
 │   │   └── session.py
