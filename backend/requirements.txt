@@ -1,6 +1,9 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.12.1
+argon2-cffi==25.1.0
+argon2-cffi-bindings==25.1.0
+asyncpg==0.31.0
 cachetools==6.2.6
 certifi==2026.2.25
 cffi==2.0.0
@@ -23,6 +26,7 @@ httptools==0.7.1
 httpx==0.28.1
 hyperframe==6.1.0
 idna==3.11
+iniconfig==2.3.0
 jinja2==3.1.6
 markdown-it-py==4.0.0
 markupsafe==3.0.3
@@ -30,8 +34,11 @@ mdurl==0.1.2
 mmh3==5.2.0
 multidict==6.7.1
 packaging==26.0
+pip==24.3.1
+pluggy==1.6.0
 postgrest==2.28.0
 propcache==0.4.1
+pwdlib==0.3.0
 pycparser==3.0
 pydantic==2.12.5
 pydantic-core==2.41.5
@@ -42,6 +49,8 @@ pyiceberg==0.11.0
 pyjwt==2.11.0
 pyparsing==3.3.2
 pyroaring==1.0.3
+pytest==8.4.2
+pytest-asyncio==1.2.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 python-multipart==0.0.22
