@@ -64,7 +64,7 @@ The frontend never calls the model server directly. All model access is proxied 
 │   │   ├── utils/
 │   │   │   └── storage_helper.py
 │   │   │
-│   │   └── __init__.py
+│   │   └── main.py
 │   │
 │   ├── migrations/
 │   ├── tests/
@@ -72,7 +72,6 @@ The frontend never calls the model server directly. All model access is proxied 
 │   │       ├── test_caption_model_service.py
 │   │       └── test_session_service.py
 │   │
-│   ├── main.py
 │   ├── pytest.ini
 │   ├── requirements.txt
 │   ├── requirements-dev.txt
