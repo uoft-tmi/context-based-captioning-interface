@@ -89,12 +89,18 @@ class CaptionModelService:
             )
             transcript = " ".join(transcript_chunks)
 
-        await self._persist_transcript(
-            session=session,
-            transcript=transcript,
-            db=db,
-            supabase=supabase,
-        )
+        try:
+            await self._persist_transcript(
+                session=session,
+                transcript=transcript,
+                db=db,
+                supabase=supabase,
+            )
+        except Exception as exc:
+            # Keep stream completion resilient even if storage is misconfigured.
+            logger.warning(
+                "Failed to persist transcript for session %s: %s", session.id, exc
+            )
 
         return transcript
 

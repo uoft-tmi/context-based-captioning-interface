@@ -33,3 +33,9 @@ class UploadLinkResponse(BaseModel):
     token: str
     signed_url: HttpUrl
     expires_in: int  # seconds
+
+
+class SessionErrorRequest(BaseModel):
+    reason: str
+    details: Optional[str] = None
+    source: Optional[str] = None

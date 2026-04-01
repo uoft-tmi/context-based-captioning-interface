@@ -1,15 +1,15 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * Audio chunk MIME type.
  * - "audio/webm": Most browser support, smaller size
  * - "audio/wav": Lossless, larger size
  */
-export type ChunkerMime = "audio/webm" | "audio/wav";
+export type ChunkerMime = 'audio/webm' | 'audio/wav';
 
-type PermissionStatus = "idle" | "granted" | "denied" | "error";
+type PermissionStatus = 'idle' | 'granted' | 'denied' | 'error';
 
 export interface AudioChunk {
   chunkIndex: number;
@@ -34,6 +34,7 @@ interface UseAudioChunkerOptions {
 
 interface UseAudioChunkerResult {
   isRecording: boolean;
+  audioLevel: number;
   permissionStatus: PermissionStatus;
   chunkCount: number;
   lastChunkSizeBytes: number | null;
@@ -62,26 +63,29 @@ function blobToBase64(blob: Blob): Promise<string> {
 
     reader.onloadend = () => {
       const result = reader.result;
-      if (typeof result !== "string") {
-        reject(new Error("Failed to encode audio chunk as base64"));
+      if (typeof result !== 'string') {
+        reject(new Error('Failed to encode audio chunk as base64'));
         return;
       }
 
-      const base64 = result.split(",")[1];
+      const base64 = result.split(',')[1];
       if (!base64) {
-        reject(new Error("Missing base64 payload from audio chunk"));
+        reject(new Error('Missing base64 payload from audio chunk'));
         return;
       }
 
       resolve(base64);
     };
 
-    reader.onerror = () => reject(new Error("Unable to read audio chunk"));
+    reader.onerror = () => reject(new Error('Unable to read audio chunk'));
     reader.readAsDataURL(blob);
   });
 }
 
-function downsampleTo16k(input: Float32Array, sourceRate: number): Float32Array {
+function downsampleTo16k(
+  input: Float32Array,
+  sourceRate: number,
+): Float32Array {
   if (sourceRate === TARGET_SAMPLE_RATE) {
     return input;
   }
@@ -125,10 +129,10 @@ function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number): Blob {
     }
   };
 
-  writeString(0, "RIFF");
+  writeString(0, 'RIFF');
   view.setUint32(4, 36 + dataSize, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
   view.setUint16(22, 1, true);
@@ -136,7 +140,7 @@ function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number): Blob {
   view.setUint32(28, byteRate, true);
   view.setUint16(32, blockAlign, true);
   view.setUint16(34, 16, true);
-  writeString(36, "data");
+  writeString(36, 'data');
   view.setUint32(40, dataSize, true);
 
   let offset = 44;
@@ -147,10 +151,13 @@ function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number): Blob {
     offset += bytesPerSample;
   }
 
-  return new Blob([buffer], { type: "audio/wav" });
+  return new Blob([buffer], { type: 'audio/wav' });
 }
 
-function consumeSamples(queue: Float32Array[], sampleCount: number): Float32Array {
+function consumeSamples(
+  queue: Float32Array[],
+  sampleCount: number,
+): Float32Array {
   const out = new Float32Array(sampleCount);
   let offset = 0;
 
@@ -173,7 +180,9 @@ function consumeSamples(queue: Float32Array[], sampleCount: number): Float32Arra
   return out;
 }
 
-export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunkerResult {
+export function useAudioChunker(
+  options: UseAudioChunkerOptions,
+): UseAudioChunkerResult {
   /**
    * Custom hook for microphone audio capture and chunking.
    *
@@ -184,7 +193,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
    *     console.log(`Chunk ${chunk.chunkIndex}: ${chunk.blobSizeBytes} bytes, drift ${chunk.driftMs}ms`);
    *     // Send chunk to backend: await sendChunk(sessionId, chunk);
    *   },
-  *   chunkDurationMs: 2500,
+   *   chunkDurationMs: 2500,
    *   onWarning: (msg) => console.warn(msg),
    *   onError: (msg) => console.error(msg),
    * });
@@ -192,7 +201,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
    * // Request permission first
    * await requestPermission();
    *
-  * // Start recording (emits chunks every ~2.5 seconds by default)
+   * // Start recording (emits chunks every ~2.5 seconds by default)
    * await start();
    *
    * // Stop recording
@@ -201,8 +210,8 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
    *
    * Options:
    * - onChunk: Called for each captured chunk (required).
-  * - chunkDurationMs: Chunk interval in ms (default 2500, clamped to 2000-3000).
-  * - preferredMimeType: Input preference only. Captured output is always "audio/wav" for backend compatibility.
+   * - chunkDurationMs: Chunk interval in ms (default 2500, clamped to 2000-3000).
+   * - preferredMimeType: Input preference only. Captured output is always "audio/wav" for backend compatibility.
    * - onWarning, onError: Optional logging callbacks.
    *
    * Returns:
@@ -217,7 +226,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     onWarning,
     onError,
     chunkDurationMs = DEFAULT_CHUNK_DURATION_MS,
-    preferredMimeType = "audio/webm",
+    preferredMimeType = 'audio/webm',
     oversizedChunkWarningBytes = DEFAULT_OVERSIZED_WARNING_BYTES,
     chunkFailureRetryCount = DEFAULT_CHUNK_FAILURE_RETRY_COUNT,
     chunkFailureRetryDelayMs = DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS,
@@ -225,13 +234,17 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
 
   const resolvedChunkDurationMs = Math.min(
     MAX_CHUNK_DURATION_MS,
-    Math.max(MIN_CHUNK_DURATION_MS, chunkDurationMs)
+    Math.max(MIN_CHUNK_DURATION_MS, chunkDurationMs),
   );
 
   const [isRecording, setIsRecording] = useState(false);
-  const [permissionStatus, setPermissionStatus] = useState<PermissionStatus>("idle");
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [permissionStatus, setPermissionStatus] =
+    useState<PermissionStatus>('idle');
   const [chunkCount, setChunkCount] = useState(0);
-  const [lastChunkSizeBytes, setLastChunkSizeBytes] = useState<number | null>(null);
+  const [lastChunkSizeBytes, setLastChunkSizeBytes] = useState<number | null>(
+    null,
+  );
 
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -244,6 +257,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
   const sessionStartedAtRef = useRef<number | null>(null);
   const lastChunkAtRef = useRef<number | null>(null);
   const stopRequestedRef = useRef(false);
+  const smoothedAudioLevelRef = useRef(0);
 
   const cleanUpAudioGraph = useCallback(() => {
     processorNodeRef.current?.disconnect();
@@ -275,8 +289,8 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
 
   const requestPermission = useCallback(async (): Promise<boolean> => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setPermissionStatus("error");
-      onError?.("Microphone capture is not supported in this browser.");
+      setPermissionStatus('error');
+      onError?.('Microphone capture is not supported in this browser.');
       return false;
     }
 
@@ -286,42 +300,43 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
       const hasAudioTrack = stream.getAudioTracks().length > 0;
       if (!hasAudioTrack) {
         stream.getTracks().forEach((track) => track.stop());
-        setPermissionStatus("error");
-        onError?.("No microphone input was detected.");
+        setPermissionStatus('error');
+        onError?.('No microphone input was detected.');
         return false;
       }
 
       cleanUpStream();
       streamRef.current = stream;
-      setPermissionStatus("granted");
+      setPermissionStatus('granted');
       return true;
     } catch (error) {
-      let message = "Unable to access microphone.";
-      let nextStatus: PermissionStatus = "error";
+      let message = 'Unable to access microphone.';
+      let nextStatus: PermissionStatus = 'error';
 
       if (error instanceof DOMException) {
         switch (error.name) {
-          case "NotAllowedError":
-            message = "Microphone permission was denied.";
-            nextStatus = "denied";
+          case 'NotAllowedError':
+            message = 'Microphone permission was denied.';
+            nextStatus = 'denied';
             break;
-          case "NotFoundError":
-            message = "No microphone was found on this device.";
+          case 'NotFoundError':
+            message = 'No microphone was found on this device.';
             break;
-          case "NotReadableError":
-            message = "Microphone is already in use by another application.";
+          case 'NotReadableError':
+            message = 'Microphone is already in use by another application.';
             break;
-          case "AbortError":
-            message = "Microphone capture was interrupted. Please try again.";
+          case 'AbortError':
+            message = 'Microphone capture was interrupted. Please try again.';
             break;
-          case "OverconstrainedError":
-            message = "Microphone settings are unsupported on this device.";
+          case 'OverconstrainedError':
+            message = 'Microphone settings are unsupported on this device.';
             break;
-          case "SecurityError":
-            message = "Microphone access is blocked by browser security settings.";
+          case 'SecurityError':
+            message =
+              'Microphone access is blocked by browser security settings.';
             break;
           default:
-            message = "Unable to access microphone.";
+            message = 'Unable to access microphone.';
             break;
         }
       }
@@ -334,8 +349,10 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
 
   const stop = useCallback(() => {
     stopRequestedRef.current = true;
+    smoothedAudioLevelRef.current = 0;
 
     setIsRecording(false);
+    setAudioLevel(0);
     cleanUpAudioGraph();
     cleanUpStream();
   }, [cleanUpAudioGraph, cleanUpStream]);
@@ -346,15 +363,18 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     }
 
     const hasPermission =
-      permissionStatus === "granted" || (await requestPermission());
+      permissionStatus === 'granted' || (await requestPermission());
 
     if (!hasPermission || !streamRef.current) {
       return;
     }
 
-    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const AudioCtx =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
     if (!AudioCtx) {
-      onError?.("Web Audio API is not available in this browser.");
+      onError?.('Web Audio API is not available in this browser.');
       return;
     }
 
@@ -363,31 +383,39 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     lastChunkAtRef.current = null;
     setChunkCount(0);
     setLastChunkSizeBytes(null);
+    setAudioLevel(0);
+    smoothedAudioLevelRef.current = 0;
     stopRequestedRef.current = false;
 
     if (chunkDurationMs !== resolvedChunkDurationMs) {
       onWarning?.(
-        `Chunk duration ${chunkDurationMs}ms is outside the supported ${MIN_CHUNK_DURATION_MS}-${MAX_CHUNK_DURATION_MS}ms range. Using ${resolvedChunkDurationMs}ms.`
+        `Chunk duration ${chunkDurationMs}ms is outside the supported ${MIN_CHUNK_DURATION_MS}-${MAX_CHUNK_DURATION_MS}ms range. Using ${resolvedChunkDurationMs}ms.`,
       );
     }
 
-    if (preferredMimeType !== "audio/wav") {
-      onWarning?.("Captured audio is always emitted as 16kHz mono WAV for backend compatibility.");
+    if (preferredMimeType !== 'audio/wav') {
+      onWarning?.(
+        'Captured audio is always emitted as 16kHz mono WAV for backend compatibility.',
+      );
     }
 
     let audioContext: AudioContext;
     try {
       audioContext = new AudioCtx();
     } catch {
-      onError?.("Failed to initialize audio processing. Please reload and try again.");
+      onError?.(
+        'Failed to initialize audio processing. Please reload and try again.',
+      );
       return;
     }
 
-    if (audioContext.state === "suspended") {
+    if (audioContext.state === 'suspended') {
       try {
         await audioContext.resume();
       } catch {
-        onError?.("Audio context is suspended. Interact with the page and try recording again.");
+        onError?.(
+          'Audio context is suspended. Interact with the page and try recording again.',
+        );
         void audioContext.close();
         return;
       }
@@ -409,7 +437,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
 
     const samplesPerChunk = Math.max(
       1,
-      Math.round(audioContext.sampleRate * (resolvedChunkDurationMs / 1000))
+      Math.round(audioContext.sampleRate * (resolvedChunkDurationMs / 1000)),
     );
 
     processor.onaudioprocess = (event: AudioProcessingEvent) => {
@@ -418,16 +446,34 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
         return;
       }
 
+      let sumSquares = 0;
+      for (let i = 0; i < input.length; i += 1) {
+        const sample = input[i];
+        sumSquares += sample * sample;
+      }
+      const rms = Math.sqrt(sumSquares / input.length);
+      const normalizedLevel = Math.min(1, rms * 6);
+      const smoothedLevel =
+        smoothedAudioLevelRef.current * 0.8 + normalizedLevel * 0.2;
+      smoothedAudioLevelRef.current = smoothedLevel;
+      setAudioLevel(smoothedLevel);
+
       const copied = new Float32Array(input.length);
       copied.set(input);
       pcmQueueRef.current.push(copied);
       queuedSampleCountRef.current += copied.length;
 
       while (queuedSampleCountRef.current >= samplesPerChunk) {
-        const chunkSamples = consumeSamples(pcmQueueRef.current, samplesPerChunk);
+        const chunkSamples = consumeSamples(
+          pcmQueueRef.current,
+          samplesPerChunk,
+        );
         queuedSampleCountRef.current -= samplesPerChunk;
 
-        const downsampled = downsampleTo16k(chunkSamples, audioContext.sampleRate);
+        const downsampled = downsampleTo16k(
+          chunkSamples,
+          audioContext.sampleRate,
+        );
         const wavChunk = encodeMonoPcm16Wav(downsampled, TARGET_SAMPLE_RATE);
 
         const now = Date.now();
@@ -450,8 +496,8 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
         if (wavChunk.size > oversizedChunkWarningBytes) {
           onWarning?.(
             `Chunk ${chunkIndex} is large (${Math.round(
-              wavChunk.size / 1024
-            )} KB) and may increase latency.`
+              wavChunk.size / 1024,
+            )} KB) and may increase latency.`,
           );
         }
 
@@ -461,7 +507,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
             const chunkPayload: AudioChunk = {
               chunkIndex,
               audioB64,
-              mime: "audio/wav",
+              mime: 'audio/wav',
               blobSizeBytes: wavChunk.size,
               elapsedMs,
               driftMs,
@@ -482,15 +528,15 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
                   const sendMessage =
                     sendError instanceof Error
                       ? sendError.message
-                      : "Unknown chunk upload error";
+                      : 'Unknown chunk upload error';
                   onWarning?.(
-                    `Chunk ${chunkIndex} dropped after ${maxAttempts} attempt(s): ${sendMessage}`
+                    `Chunk ${chunkIndex} dropped after ${maxAttempts} attempt(s): ${sendMessage}`,
                   );
                   return;
                 }
 
                 onWarning?.(
-                  `Chunk ${chunkIndex} upload failed (attempt ${attempt}/${maxAttempts - 1}). Retrying...`
+                  `Chunk ${chunkIndex} upload failed (attempt ${attempt}/${maxAttempts - 1}). Retrying...`,
                 );
                 await sleep(Math.max(0, chunkFailureRetryDelayMs));
               }
@@ -509,10 +555,12 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
     streamRef.current.getAudioTracks().forEach((track) => {
       track.onended = () => {
         setIsRecording(false);
+        smoothedAudioLevelRef.current = 0;
+        setAudioLevel(0);
         cleanUpAudioGraph();
         cleanUpStream();
         if (!stopRequestedRef.current) {
-          onWarning?.("Recording stopped unexpectedly. Please start again.");
+          onWarning?.('Recording stopped unexpectedly. Please start again.');
         }
       };
     });
@@ -543,6 +591,7 @@ export function useAudioChunker(options: UseAudioChunkerOptions): UseAudioChunke
 
   return {
     isRecording,
+    audioLevel,
     permissionStatus,
     chunkCount,
     lastChunkSizeBytes,

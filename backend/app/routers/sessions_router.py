@@ -1,13 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, UploadFile
-
 from app.clients.supabase_client import get_supabase_client
 from app.core.auth import get_user_id
 from app.core.db_dependencies import DBPool
 from app.core.session_dependencies import get_session_if_active
-from app.models.session import CreateSessionRequest
+from app.models.session import CreateSessionRequest, SessionErrorRequest
 from app.services import session_service
+from fastapi import APIRouter, Depends, UploadFile
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -100,12 +99,40 @@ async def download_session_note(
 
 @router.post("/{session_id}/end")
 async def end_session(
+    session_id: UUID,
     db: DBPool,
-    session=Depends(get_session_if_active),
+    user_id: UUID = Depends(get_user_id),
     supabase_client=Depends(get_supabase_client),
 ):
+    session = await session_service.get_session(
+        db=db,
+        session_id=session_id,
+        user_id=user_id,
+    )
     return await session_service.end_session(
         session=session,
+        supabase_client=supabase_client,
+        db=db,
+    )
+
+
+@router.post("/{session_id}/error")
+@router.post("/{session_id}/errors")
+async def mark_session_error(
+    session_id: UUID,
+    payload: SessionErrorRequest,
+    db: DBPool,
+    user_id: UUID = Depends(get_user_id),
+    supabase_client=Depends(get_supabase_client),
+):
+    session = await session_service.get_session(
+        db=db,
+        session_id=session_id,
+        user_id=user_id,
+    )
+    return await session_service.mark_session_error(
+        session=session,
+        payload=payload,
         supabase_client=supabase_client,
         db=db,
     )

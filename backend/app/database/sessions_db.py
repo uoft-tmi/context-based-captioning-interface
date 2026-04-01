@@ -106,6 +106,27 @@ async def end_session(db: DBPool, session_id: UUID, user_id: UUID) -> None:
         )
 
 
+async def mark_session_error(
+    db: DBPool,
+    session_id: UUID,
+    user_id: UUID,
+    error: str,
+) -> None:
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE sessions
+            SET error = $3,
+                is_active = FALSE,
+                finalized_at = COALESCE(finalized_at, NOW())
+            WHERE id = $1 AND user_id = $2
+            """,
+            session_id,
+            user_id,
+            error,
+        )
+
+
 async def deactivate_sessions(
     db: DBPool,
     user_id: UUID,

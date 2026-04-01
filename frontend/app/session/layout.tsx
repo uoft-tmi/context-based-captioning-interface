@@ -1,11 +1,13 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 
-export default function SessionLayout({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
+export default function SessionLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [email, setEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -18,28 +20,30 @@ export default function SessionLayout({ children }: { children: React.ReactNode 
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    router.push("/");
+    if (typeof window !== 'undefined') {
+      window.location.replace('/');
+    }
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-dynamic px-4 pb-12">
-      <header className="py-6 flex justify-between items-center max-w-5xl mx-auto w-full">
-        <h1 className="text-xl font-bold tracking-tight text-[var(--foreground)] drop-shadow-sm">
+    <div className='flex flex-col min-h-screen bg-gradient-dynamic px-4 pb-12'>
+      <header className='py-6 flex justify-between items-center max-w-5xl mx-auto w-full'>
+        <h1 className='text-xl font-bold tracking-tight text-foreground drop-shadow-sm'>
           Lecture Captioning
         </h1>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-[var(--text-secondary)] hidden sm:inline-block">
+        <div className='flex items-center gap-4'>
+          <span className='text-sm text-(--text-secondary) hidden sm:inline-block'>
             {email}
           </span>
           <button
             onClick={handleLogout}
-            className="text-sm px-4 py-2 rounded-full border border-[var(--input-border)] hover:bg-[var(--card-bg)] transition-colors"
+            className='text-sm px-4 py-2 rounded-full border border-(--input-border) hover:bg-(--card-bg) transition-colors'
           >
             Sign out
           </button>
         </div>
       </header>
-      <main className="flex-grow flex flex-col items-center justify-center w-full max-w-5xl mx-auto">
+      <main className='grow flex flex-col items-center justify-center w-full max-w-5xl mx-auto'>
         {children}
       </main>
     </div>

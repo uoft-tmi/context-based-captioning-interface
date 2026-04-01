@@ -1,16 +1,16 @@
+import json
 from typing import Optional
 from uuid import UUID, uuid4
-
-from asyncpg import UniqueViolationError
-from fastapi import HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
-from supabase import AsyncClient
 
 from app.core.config import get_settings
 from app.core.db_dependencies import DBPool
 from app.database import notes_db, sessions_db
-from app.models.session import Session, SessionMode
+from app.models.session import Session, SessionErrorRequest, SessionMode
 from app.utils.storage_helper import cleanup_storage
+from asyncpg import UniqueViolationError
+from fastapi import HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
+from supabase import AsyncClient
 
 _settings = get_settings()
 
@@ -192,6 +192,47 @@ async def delete_note(
         )
 
         return {"status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def mark_session_error(
+    session: Session,
+    payload: SessionErrorRequest,
+    supabase_client: AsyncClient,
+    db: DBPool,
+) -> dict:
+    try:
+        session_id = session.id
+        user_id = session.user_id
+        error_payload = {
+            "reason": payload.reason,
+            "details": payload.details,
+            "source": payload.source,
+        }
+        error_text = json.dumps(error_payload, ensure_ascii=True)
+
+        await sessions_db.mark_session_error(
+            db=db,
+            session_id=session_id,
+            user_id=user_id,
+            error=error_text,
+        )
+
+        await cleanup_storage(
+            user_id=user_id,
+            session_id=session_id,
+            supabase_client=supabase_client,
+            db=db,
+        )
+
+        return {
+            "message": "Session marked as error",
+            "session_id": str(session_id),
+            "error": error_text,
+        }
     except HTTPException:
         raise
     except Exception as e:

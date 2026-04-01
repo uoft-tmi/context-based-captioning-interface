@@ -16,11 +16,12 @@ async def lifespan(app: FastAPI):
     settings: Settings = get_settings()
     await create_pool(settings.POSTGRES_URL)
     await init_supabase_client()
-    async with httpx.AsyncClient(base_url=settings.MODEL_BASE_URL) as client:
-        app.state.model_client = ModelClient(client)
-        yield
-    yield
-    await close_pool()
+    try:
+        async with httpx.AsyncClient(base_url=settings.MODEL_BASE_URL) as client:
+            app.state.model_client = ModelClient(client)
+            yield
+    finally:
+        await close_pool()
 
 
 app = FastAPI(
@@ -28,7 +29,7 @@ app = FastAPI(
 )
 
 
-origins = []
+origins = ["http://localhost:3000"]
 
 app.add_middleware(
     CORSMiddleware,
