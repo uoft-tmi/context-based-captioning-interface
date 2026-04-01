@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
-
 from app.core.exceptions import ModelUnavailableError
 from app.models.session import Session, SessionMode
 from app.services.caption_model_service import CaptionModelService
@@ -62,7 +61,12 @@ def supabase_chain() -> tuple[SimpleNamespace, AsyncMock, AsyncMock]:
             session_pdfs_bucket if bucket == "session-pdfs" else transcripts_bucket
         )
     )
-    supabase = SimpleNamespace(storage=SimpleNamespace(from_=from_bucket))
+    storage = SimpleNamespace(
+        from_=from_bucket,
+        get_bucket=AsyncMock(),
+        create_bucket=AsyncMock(),
+    )
+    supabase = SimpleNamespace(storage=storage)
     return supabase, session_pdfs_bucket.download, transcripts_bucket.upload
 
 
@@ -140,10 +144,38 @@ async def test_finalize_uses_model_transcript_and_persists(
 
     assert transcript == "hello world"
     upload.assert_awaited_once()
+    supabase.storage.get_bucket.assert_awaited_once_with("transcripts")
+    supabase.storage.create_bucket.assert_not_awaited()
     conn.execute.assert_awaited_once()
     execute_args = conn.execute.await_args.args
-    assert execute_args[1] == f"transcripts/{session.user_id}/{session.id}.txt"
+    assert execute_args[1] == f"transcripts/{session.user_id}/{session.id}.pdf"
     assert execute_args[2] == session.id
+
+
+@pytest.mark.asyncio
+async def test_finalize_creates_transcripts_bucket_when_missing(
+    service: CaptionModelService,
+    session: Session,
+    supabase_chain: tuple[SimpleNamespace, AsyncMock, AsyncMock],
+    service_client: AsyncMock,
+):
+    supabase, _, upload = supabase_chain
+    conn = AsyncMock()
+    db = cast(Any, SimpleNamespace(acquire=lambda: _AcquireCtx(conn)))
+
+    supabase.storage.get_bucket.side_effect = [RuntimeError("missing"), None]
+    service_client.finalize.return_value = SimpleNamespace(final_transcript="hello")
+
+    transcript = await service.finalize(
+        session=session,
+        transcript_chunks=[],
+        db=db,
+        supabase=cast(Any, supabase),
+    )
+
+    assert transcript == "hello"
+    supabase.storage.create_bucket.assert_awaited_once()
+    upload.assert_awaited_once()
 
 
 @pytest.mark.asyncio

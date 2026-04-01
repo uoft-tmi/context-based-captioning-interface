@@ -265,8 +265,41 @@ async def download_session_transcript(
     session_id: UUID,
     user_id: UUID,
     db: DBPool,
-) -> dict:
-    return {"transcript": "Transcript download not implemented yet"}
+    supabase_client: AsyncClient,
+) -> StreamingResponse:
+    try:
+        session = await sessions_db.get_session(
+            db=db,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not session.transcript_key:
+            raise HTTPException(status_code=404, detail="Transcript not available")
+
+        payload = await supabase_client.storage.from_("transcripts").download(
+            session.transcript_key
+        )
+
+        if not payload:
+            raise HTTPException(status_code=404, detail="Transcript not available")
+
+        is_pdf = session.transcript_key.lower().endswith(".pdf")
+        filename = (
+            f"session-{session_id}.pdf" if is_pdf else f"session-{session_id}.txt"
+        )
+        media_type = "application/pdf" if is_pdf else "text/plain"
+
+        return StreamingResponse(
+            iter([payload]),
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 async def slide_expiry(db: DBPool, session_id: UUID):

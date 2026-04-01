@@ -3,7 +3,6 @@ from typing import Optional
 from uuid import UUID
 
 import httpx
-
 from app.core.config import get_settings
 from app.core.exceptions import ModelUnavailableError
 from app.models.caption_model import (
@@ -21,6 +20,21 @@ class ModelClient:
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {get_settings().MODEL_API_KEY}"}
+
+    def _format_http_error(self, exc: httpx.HTTPStatusError) -> str:
+        response = exc.response
+        status = response.status_code
+        reason = response.reason_phrase
+        body = ""
+        try:
+            body = response.text.strip()
+        except Exception:
+            body = ""
+        if body:
+            if len(body) > 200:
+                body = f"{body[:200]}..."
+            return f"{status} {reason}: {body}"
+        return f"{status} {reason}"
 
     async def _post_with_retry(
         self,
@@ -43,7 +57,18 @@ class ModelClient:
                 )
                 resp.raise_for_status()
                 return resp
-            except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in (401, 403):
+                    raise ModelUnavailableError(
+                        "Model server auth failed "
+                        f"({self._format_http_error(e)}). "
+                        "Check MODEL_API_KEY."
+                    ) from e
+                last_exc = e
+                if attempt < retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+            except httpx.TransportError as e:
                 last_exc = e
                 if attempt < retries - 1:
                     await asyncio.sleep(delay)
@@ -97,7 +122,16 @@ class ModelClient:
             headers=self._headers(),
             timeout=get_settings().CHUNK_TIMEOUT_SECONDS,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                raise ModelUnavailableError(
+                    "Model server auth failed "
+                    f"({self._format_http_error(e)}). "
+                    "Check MODEL_API_KEY."
+                ) from e
+            raise
         return TranscriptChunk(**resp.json())
 
     async def finalize(self, session_id: UUID) -> FinalTranscript:

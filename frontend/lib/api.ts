@@ -40,6 +40,12 @@ function toNetworkErrorMessage(error: unknown): string {
   return 'Failed to fetch';
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function toErrorString(value: unknown, fallback: string): string {
   if (typeof value === 'string' && value.trim().length > 0) {
     return value;
@@ -550,10 +556,28 @@ export async function markSessionError(
 }
 
 export async function downloadSessionPdf(sessionId: string): Promise<Blob> {
-  const res = await request(`/api/sessions/${sessionId}/download`, {
-    method: 'GET',
-  });
-  return expectBlob(res, 'Failed to download session PDF');
+  const maxAttempts = 6;
+  const retryDelayMs = 700;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await request(
+      `/api/sessions/${sessionId}/download`,
+      {
+        method: 'GET',
+      },
+      false,
+    );
+
+    // Transcript persistence can lag slightly behind end-session.
+    if (res.status === 404 && attempt < maxAttempts) {
+      await sleep(retryDelayMs);
+      continue;
+    }
+
+    return expectBlob(res, 'Failed to download session PDF');
+  }
+
+  throw new Error('Failed to download session PDF: transcript not available');
 }
 
 export async function healthCheck(): Promise<Record<string, unknown>> {

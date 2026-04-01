@@ -1,14 +1,13 @@
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
 from app.clients.caption_model_client import ModelClient
 from app.clients.pool import close_pool, create_pool
 from app.clients.supabase_client import init_supabase_client
 from app.core.config import Settings, get_settings
 from app.routers import audio_router, sessions_router
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 
 @asynccontextmanager
@@ -29,11 +28,15 @@ app = FastAPI(
 )
 
 
-origins = ["http://localhost:3000"]
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

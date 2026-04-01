@@ -5,8 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import {
   downloadSessionPdf,
   endSession,
+  getSessionDetails,
   getSessionStreamUrlsWithAuth,
   markSessionError,
+  type StreamChunkPayload,
   type StreamServerMessage,
 } from '@/lib/api';
 import { useAudioChunker, type AudioChunk } from '@/lib/audio/useAudioChunker';
@@ -19,6 +21,8 @@ type LiveState =
   | 'ERROR';
 
 const WEBSOCKET_CONNECT_TIMEOUT_MS = 10_000;
+const TRANSCRIPT_READY_MAX_POLLS = 20;
+const TRANSCRIPT_READY_POLL_DELAY_MS = 500;
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error';
@@ -59,15 +63,56 @@ function parseStreamMessage(raw: string): StreamServerMessage {
   }
 }
 
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
+async function waitForTranscriptReady(sessionId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < TRANSCRIPT_READY_MAX_POLLS; attempt += 1) {
+    try {
+      const details = await getSessionDetails(sessionId);
+      if (
+        typeof details === 'object' &&
+        details !== null &&
+        'transcript_key' in details &&
+        typeof (details as Record<string, unknown>).transcript_key ===
+          'string' &&
+        ((details as Record<string, unknown>).transcript_key as string).length >
+          0
+      ) {
+        return true;
+      }
+    } catch {
+      // Ignore transient polling errors; retry until timeout.
+    }
+    await sleep(TRANSCRIPT_READY_POLL_DELAY_MS);
+  }
+  return false;
+}
+
+async function coerceMessageToText(data: unknown): Promise<string | null> {
+  if (typeof data === 'string') {
+    return data;
   }
 
-  return bytes;
+  if (data instanceof Blob) {
+    return data.text();
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(data));
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    return new TextDecoder().decode(
+      new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
+    );
+  }
+
+  return null;
 }
 
 export default function LiveSessionPage() {
@@ -126,7 +171,16 @@ export default function LiveSessionPage() {
         throw new Error('Streaming connection is not open.');
       }
 
-      ws.send(base64ToBytes(chunk.audioB64));
+      const payload: StreamChunkPayload = {
+        type: 'audio_chunk',
+        chunk_index: chunk.chunkIndex,
+        audio_b64: chunk.audioB64,
+        mime: chunk.mime,
+        elapsed_ms: chunk.elapsedMs,
+        created_at: chunk.createdAt,
+      };
+
+      ws.send(JSON.stringify(payload));
     },
     [],
   );
@@ -243,7 +297,20 @@ export default function LiveSessionPage() {
         return;
       }
 
-      setStatusMsg('Session ended successfully.');
+      setStatusMsg('Finalizing transcript...');
+      const transcriptReady = await waitForTranscriptReady(sessionId);
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      if (transcriptReady) {
+        setStatusMsg('Session ended successfully. Transcript is ready.');
+      } else {
+        setStatusMsg(
+          'Session ended. Transcript is still processing; try download again in a moment.',
+        );
+      }
       setLiveState('COMPLETE');
     } catch (error) {
       const message = getErrorMessage(error);
@@ -404,38 +471,41 @@ export default function LiveSessionPage() {
         manualSocketCloseRef.current = false;
 
         ws.onmessage = (event: MessageEvent) => {
-          if (typeof event.data !== 'string') {
-            return;
-          }
-
-          const message = parseStreamMessage(event.data);
-
-          if (message.error || message.detail) {
-            handleUnexpectedFailure(
-              'Backend stream reported an error.',
-              message.error ?? message.detail,
-            );
-            return;
-          }
-
-          const incomingText =
-            message.final_text ??
-            message.partial_text ??
-            message.text ??
-            message.caption;
-
-          if (incomingText && incomingText.trim().length > 0) {
-            if (message.is_final || message.final_text) {
-              setFinalCaptions((prev) => [...prev, incomingText]);
-              setLiveCaption('');
-            } else {
-              setLiveCaption(incomingText);
+          void (async () => {
+            const raw = await coerceMessageToText(event.data);
+            if (!raw) {
+              return;
             }
-          }
 
-          if (message.done) {
-            void finalizeAsEnded();
-          }
+            const message = parseStreamMessage(raw);
+
+            if (message.error || message.detail) {
+              handleUnexpectedFailure(
+                'Backend stream reported an error.',
+                message.error ?? message.detail,
+              );
+              return;
+            }
+
+            const incomingText =
+              message.final_text ??
+              message.partial_text ??
+              message.text ??
+              message.caption;
+
+            if (incomingText && incomingText.trim().length > 0) {
+              if (message.is_final || message.final_text) {
+                setFinalCaptions((prev) => [...prev, incomingText]);
+                setLiveCaption('');
+              } else {
+                setLiveCaption(incomingText);
+              }
+            }
+
+            if (message.done) {
+              void finalizeAsEnded();
+            }
+          })();
         };
 
         ws.onerror = () => {
@@ -520,6 +590,7 @@ export default function LiveSessionPage() {
 
   const pulseTransform = `scale(${1 + Math.min(audioLevel, 1) * 0.9})`;
   const pulseGlow = `${20 + Math.round(audioLevel * 50)}px`;
+  const audioLevelPercent = Math.max(0, Math.min(100, audioLevel * 100));
 
   return (
     <div className='glass-panel w-full max-w-3xl p-8 sm:p-12 space-y-8 relative overflow-hidden'>
@@ -569,7 +640,7 @@ export default function LiveSessionPage() {
               <div className='rounded-xl border border-(--input-border) bg-(--input-bg) p-3 text-center'>
                 <p className='text-(--text-secondary)'>Audio Level</p>
                 <p className='font-semibold text-lg'>
-                  {Math.round(audioLevel * 100)}%
+                  {audioLevelPercent.toFixed(1)}%
                 </p>
               </div>
               <div className='rounded-xl border border-(--input-border) bg-(--input-bg) p-3 text-center'>

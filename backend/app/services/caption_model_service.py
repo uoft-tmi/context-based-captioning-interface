@@ -2,16 +2,18 @@ import logging
 from uuid import UUID
 
 import asyncpg
-from supabase import AsyncClient
-
 from app.clients.caption_model_client import ModelClient
 from app.core.db_dependencies import DBPool
 from app.core.exceptions import ModelUnavailableError
 from app.database import notes_db, sessions_db
 from app.models.session import Session
+from app.utils.pdf_helper import transcript_to_pdf_bytes
 from app.utils.storage_helper import cleanup_storage
+from supabase import AsyncClient
 
 logger = logging.getLogger(__name__)
+TRANSCRIPTS_BUCKET = "transcripts"
+TRANSCRIPTS_MIME_TYPES = ["application/pdf", "text/plain"]
 
 
 class CaptionModelService:
@@ -96,11 +98,9 @@ class CaptionModelService:
                 db=db,
                 supabase=supabase,
             )
-        except Exception as exc:
+        except Exception:
             # Keep stream completion resilient even if storage is misconfigured.
-            logger.warning(
-                "Failed to persist transcript for session %s: %s", session.id, exc
-            )
+            logger.exception("Failed to persist transcript for session %s", session.id)
 
         return transcript
 
@@ -143,13 +143,18 @@ class CaptionModelService:
         db: asyncpg.Pool,
         supabase: AsyncClient,
     ) -> None:
-        path = f"transcripts/{session.user_id}/{session.id}.txt"
+        path = f"transcripts/{session.user_id}/{session.id}.pdf"
+        pdf_bytes = transcript_to_pdf_bytes(
+            transcript, title=f"Session {session.id} Transcript"
+        )
+
+        await self._ensure_transcripts_bucket(supabase)
 
         # Upload to Supabase storage
-        await supabase.storage.from_("transcripts").upload(
-            path=path,
-            file=transcript.encode("utf-8"),
-            file_options={"content-type": "text/plain", "upsert": "true"},
+        await supabase.storage.from_(TRANSCRIPTS_BUCKET).upload(
+            path,
+            pdf_bytes,
+            {"content-type": "application/pdf", "upsert": "true"},
         )
 
         # Store transcript key for retrieval from storage.
@@ -163,3 +168,25 @@ class CaptionModelService:
                 path,
                 session.id,
             )
+
+    async def _ensure_transcripts_bucket(self, supabase: AsyncClient) -> None:
+        try:
+            await supabase.storage.get_bucket(TRANSCRIPTS_BUCKET)
+            return
+        except Exception:
+            logger.info(
+                "Transcripts bucket missing or inaccessible, attempting to create it"
+            )
+
+        try:
+            await supabase.storage.create_bucket(
+                TRANSCRIPTS_BUCKET,
+                options={
+                    "public": False,
+                    "allowed_mime_types": TRANSCRIPTS_MIME_TYPES,
+                },
+            )
+            return
+        except Exception:
+            # Handle races where another request created the bucket concurrently.
+            await supabase.storage.get_bucket(TRANSCRIPTS_BUCKET)

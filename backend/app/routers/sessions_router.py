@@ -143,9 +143,11 @@ async def download_session_pdf(
     session_id: UUID,
     db: DBPool,
     user_id: UUID = Depends(get_user_id),
+    supabase_client=Depends(get_supabase_client),
 ):
     return await session_service.download_session_transcript(
         session_id=session_id,
         user_id=user_id,
         db=db,
+        supabase_client=supabase_client,
     )

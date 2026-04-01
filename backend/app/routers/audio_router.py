@@ -5,9 +5,6 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from supabase import AsyncClient
-
 from app.clients.caption_model_client import ModelClient
 from app.clients.supabase_client import get_supabase_client
 from app.core.auth import verify_jwt
@@ -17,6 +14,8 @@ from app.core.dependencies import get_model_client
 from app.core.exceptions import SessionExpiredError
 from app.services import session_service
 from app.services.caption_model_service import CaptionModelService
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from supabase import AsyncClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ws/sessions", tags=["sessions"])
@@ -186,11 +185,19 @@ async def stream_audio(
                 audio_chunk=chunk,
                 chunk_index=chunk_index,
             )
+            current_chunk_index = chunk_index
             chunk_index += 1
             transcript_chunks.append(result)
 
             await session_service.slide_expiry(db=db, session_id=session_id)
-            await websocket.send_json({"type": "caption", "text": result})
+            await websocket.send_json(
+                {
+                    "type": "caption",
+                    "text": result,
+                    "partial_text": result,
+                    "chunk_index": current_chunk_index,
+                }
+            )
     except SessionExpiredError:
         close_code = 4001
         close_reason = "Session expired"
@@ -204,18 +211,15 @@ async def stream_audio(
         close_reason = "Invalid audio payload"
         send_payload_message = True
         payload_message = str(exc)
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as exc:
         disconnected = True
+        close_code = getattr(exc, "code", 1000) or 1000
+        close_reason = "Client disconnected"
     except Exception:
         logger.exception("Unexpected error in stream_audio")
         close_code = 1011
         close_reason = "Internal server error"
     finally:
-        # If the client disconnected, keep the session active so it can reconnect
-        # without forcing finalize/persist/cleanup on every transient drop.
-        if disconnected:
-            return
-
         if send_expiry_message:
             try:
                 await websocket.send_json({"type": "error", "text": "Session expired"})
@@ -236,7 +240,7 @@ async def stream_audio(
             except Exception:
                 pass
 
-        if model_session_started and transcript_chunks:
+        if model_session_started:
             try:
                 transcript = await caption_model_service.finalize(
                     session=session,
@@ -256,7 +260,10 @@ async def stream_audio(
                 )
 
         should_end_session = (
-            send_expiry_message or send_inactivity_message or close_code == 1011
+            disconnected
+            or send_expiry_message
+            or send_inactivity_message
+            or close_code == 1011
         )
         if should_end_session:
             try:

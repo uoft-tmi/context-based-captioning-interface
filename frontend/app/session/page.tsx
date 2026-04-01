@@ -32,10 +32,60 @@ function getErrorMessage(error: unknown): string {
 
 function parseStreamMessage(raw: string): StreamServerMessage {
   try {
-    return JSON.parse(raw) as StreamServerMessage;
+    const parsed = JSON.parse(raw) as StreamServerMessage & {
+      type?: string;
+      text?: string;
+    };
+
+    if (parsed.type === 'error') {
+      return {
+        ...parsed,
+        error: parsed.error ?? parsed.text,
+      };
+    }
+
+    if (parsed.type === 'final') {
+      return {
+        ...parsed,
+        final_text: parsed.final_text ?? parsed.text,
+        is_final: true,
+      };
+    }
+
+    if (parsed.type === 'caption') {
+      return {
+        ...parsed,
+        partial_text: parsed.partial_text ?? parsed.text,
+      };
+    }
+
+    return parsed;
   } catch {
     return { partial_text: raw };
   }
+}
+
+async function coerceMessageToText(data: unknown): Promise<string | null> {
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  if (data instanceof Blob) {
+    return data.text();
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(data));
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    return new TextDecoder().decode(
+      new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
+    );
+  }
+
+  return null;
 }
 
 function formatFailureMessage(reason: string, details?: string): string {
@@ -399,38 +449,41 @@ export default function SessionPage() {
       manualSocketCloseRef.current = false;
 
       ws.onmessage = (event: MessageEvent) => {
-        if (typeof event.data !== 'string') {
-          return;
-        }
-
-        const message = parseStreamMessage(event.data);
-
-        if (message.error || message.detail) {
-          handleUnexpectedFailure(
-            'Backend stream reported an error.',
-            message.error ?? message.detail,
-          );
-          return;
-        }
-
-        const incomingText =
-          message.final_text ??
-          message.partial_text ??
-          message.text ??
-          message.caption;
-
-        if (incomingText && incomingText.trim().length > 0) {
-          if (message.is_final || message.final_text) {
-            setFinalCaptions((prev) => [...prev, incomingText]);
-            setLiveCaption('');
-          } else {
-            setLiveCaption(incomingText);
+        void (async () => {
+          const raw = await coerceMessageToText(event.data);
+          if (!raw) {
+            return;
           }
-        }
 
-        if (message.done) {
-          void finalizeAsEnded();
-        }
+          const message = parseStreamMessage(raw);
+
+          if (message.error || message.detail) {
+            handleUnexpectedFailure(
+              'Backend stream reported an error.',
+              message.error ?? message.detail,
+            );
+            return;
+          }
+
+          const incomingText =
+            message.final_text ??
+            message.partial_text ??
+            message.text ??
+            message.caption;
+
+          if (incomingText && incomingText.trim().length > 0) {
+            if (message.is_final || message.final_text) {
+              setFinalCaptions((prev) => [...prev, incomingText]);
+              setLiveCaption('');
+            } else {
+              setLiveCaption(incomingText);
+            }
+          }
+
+          if (message.done) {
+            void finalizeAsEnded();
+          }
+        })();
       };
 
       ws.onerror = () => {

@@ -2,10 +2,9 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from supabase import AsyncClient
-
 from app.core.db_dependencies import DBPool
 from app.database import notes_db
+from supabase import AsyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -17,22 +16,32 @@ async def cleanup_storage(
     session_id: Optional[UUID] = None,
 ) -> None:
     """
-    Takes in user id and session id and deletes all files in the corresponding storage path in supabase.
-    If session id is None, deletes all files in the user's folder.
+    Deletes note PDFs associated with the session from Supabase storage.
+    Skips deletion if session_id is not provided.
     """
-    bucket = "session-pdfs"
+    if not session_id:
+        logger.warning(
+            "cleanup_storage called without session_id; skipping bulk delete for user %s",
+            user_id,
+        )
+        return
 
-    path = f"{user_id}/{session_id}" if session_id else f"{user_id}"
-    files = await supabase_client.storage.from_(bucket).list(path)
-    file_paths = [f"{path}/{file['name']}" for file in files if file.get("name")]
-    if file_paths:
-        try:
-            await supabase_client.storage.from_(bucket).remove(file_paths)
-            if session_id:
-                await notes_db.delete_all_notes(
-                    db=db,
-                    session_id=session_id,
-                    user_id=user_id,
-                )
-        except Exception as e:
-            logger.exception("Error deleting files from storage: %s", e)
+    bucket = "session-pdfs"
+    storage_keys = await notes_db.list_note_storage_keys(
+        db=db,
+        session_id=session_id,
+        user_id=user_id,
+    )
+    file_paths = [f"{user_id}/{session_id}/{key}" for key in storage_keys]
+    if not file_paths:
+        return
+
+    try:
+        await supabase_client.storage.from_(bucket).remove(file_paths)
+        await notes_db.delete_all_notes(
+            db=db,
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except Exception as e:
+        logger.exception("Error deleting files from storage: %s", e)

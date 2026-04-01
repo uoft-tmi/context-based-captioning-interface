@@ -17,6 +17,7 @@ fastapi==0.135.0
 fastapi-cli==0.0.24
 fastapi-cloud-cli==0.14.0
 fastar==0.8.0
+fpdf2==2.7.9
 fsspec==2026.2.0
 h11==0.16.0
 h2==4.3.0

@@ -50,6 +50,9 @@ const DEFAULT_OVERSIZED_WARNING_BYTES = 512 * 1024;
 const DEFAULT_CHUNK_FAILURE_RETRY_COUNT = 1;
 const DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS = 300;
 const TARGET_SAMPLE_RATE = 16_000;
+const METER_EPSILON = 1e-8;
+const MIN_METER_DB = -90;
+const MAX_METER_DB = -20;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -180,6 +183,57 @@ function consumeSamples(
   return out;
 }
 
+function downmixInputToMono(inputBuffer: AudioBuffer): Float32Array {
+  const channels = inputBuffer.numberOfChannels;
+  const sampleCount = inputBuffer.length;
+
+  if (channels <= 1) {
+    const mono = new Float32Array(sampleCount);
+    mono.set(inputBuffer.getChannelData(0));
+    return mono;
+  }
+
+  const mono = new Float32Array(sampleCount);
+  for (let channel = 0; channel < channels; channel += 1) {
+    const samples = inputBuffer.getChannelData(channel);
+    for (let i = 0; i < sampleCount; i += 1) {
+      mono[i] += samples[i];
+    }
+  }
+
+  const invChannelCount = 1 / channels;
+  for (let i = 0; i < sampleCount; i += 1) {
+    mono[i] *= invChannelCount;
+  }
+
+  return mono;
+}
+
+function computeAudioLevel(samples: Float32Array): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+
+  let sumSquares = 0;
+  let peak = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = samples[i];
+    const absSample = Math.abs(sample);
+    if (absSample > peak) {
+      peak = absSample;
+    }
+    sumSquares += sample * sample;
+  }
+
+  const rms = Math.sqrt(sumSquares / samples.length);
+
+  // Use both RMS and peak to keep the meter responsive on quiet microphones.
+  const signal = Math.max(rms, peak * 0.5);
+  const db = 20 * Math.log10(Math.max(signal, METER_EPSILON));
+  const normalized = (db - MIN_METER_DB) / (MAX_METER_DB - MIN_METER_DB);
+  return Math.max(0, Math.min(1, normalized));
+}
+
 export function useAudioChunker(
   options: UseAudioChunkerOptions,
 ): UseAudioChunkerResult {
@@ -295,7 +349,15 @@ export function useAudioChunker(
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: TARGET_SAMPLE_RATE },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
 
       const hasAudioTrack = stream.getAudioTracks().length > 0;
       if (!hasAudioTrack) {
@@ -306,6 +368,9 @@ export function useAudioChunker(
       }
 
       cleanUpStream();
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+      });
       streamRef.current = stream;
       setPermissionStatus('granted');
       return true;
@@ -441,25 +506,19 @@ export function useAudioChunker(
     );
 
     processor.onaudioprocess = (event: AudioProcessingEvent) => {
-      const input = event.inputBuffer.getChannelData(0);
-      if (!input || input.length === 0) {
+      const monoInput = downmixInputToMono(event.inputBuffer);
+      if (!monoInput || monoInput.length === 0) {
         return;
       }
 
-      let sumSquares = 0;
-      for (let i = 0; i < input.length; i += 1) {
-        const sample = input[i];
-        sumSquares += sample * sample;
-      }
-      const rms = Math.sqrt(sumSquares / input.length);
-      const normalizedLevel = Math.min(1, rms * 6);
+      const normalizedLevel = computeAudioLevel(monoInput);
       const smoothedLevel =
         smoothedAudioLevelRef.current * 0.8 + normalizedLevel * 0.2;
       smoothedAudioLevelRef.current = smoothedLevel;
       setAudioLevel(smoothedLevel);
 
-      const copied = new Float32Array(input.length);
-      copied.set(input);
+      const copied = new Float32Array(monoInput.length);
+      copied.set(monoInput);
       pcmQueueRef.current.push(copied);
       queuedSampleCountRef.current += copied.length;
 
