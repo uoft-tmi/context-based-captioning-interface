@@ -5,11 +5,11 @@ A web app that provides context-aware real-time lecture captioning. Users option
 ## Architecture
 
 ```
-[Browser] → [Next.js / Vercel] → [FastAPI / Fly.io] → [Model Server / GPU]
+[Browser] → [Next.js / Vercel] → [FastAPI / Render] → [Model Server / GPU]
 ```
 
 - **Frontend:** Next.js (App Router, TypeScript, Tailwind CSS) — deployed on Vercel
-- **Backend:** FastAPI — deployed on Fly.io (Docker)
+- **Backend:** FastAPI — deployed on Render (Docker)
 - **Auth + DB + Storage:** Supabase (Auth, Postgres, Storage)
 - **Model:** On-demand GPU endpoint (RunPod or equivalent) — owned by model team
 
@@ -185,7 +185,7 @@ Sessions are limited to 5 minutes max, with 1 active session per user.
 
 ## Deployment
 
-**Backend (Fly.io):**
+**Backend (Render):**
 ```bash
 cd backend
 flyctl launch
