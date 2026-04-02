@@ -183,25 +183,29 @@ function consumeSamples(
   return out;
 }
 
-function downmixInputToMono(inputBuffer: AudioBuffer): Float32Array {
-  const channels = inputBuffer.numberOfChannels;
-  const sampleCount = inputBuffer.length;
+function downmixChannelsToMono(channels: Float32Array[]): Float32Array {
+  const channelCount = channels.length;
+  const sampleCount = channels[0]?.length ?? 0;
 
-  if (channels <= 1) {
+  if (sampleCount === 0 || channelCount === 0) {
+    return new Float32Array(0);
+  }
+
+  if (channelCount <= 1) {
     const mono = new Float32Array(sampleCount);
-    mono.set(inputBuffer.getChannelData(0));
+    mono.set(channels[0]);
     return mono;
   }
 
   const mono = new Float32Array(sampleCount);
-  for (let channel = 0; channel < channels; channel += 1) {
-    const samples = inputBuffer.getChannelData(channel);
+  for (let channel = 0; channel < channelCount; channel += 1) {
+    const samples = channels[channel];
     for (let i = 0; i < sampleCount; i += 1) {
       mono[i] += samples[i];
     }
   }
 
-  const invChannelCount = 1 / channels;
+  const invChannelCount = 1 / channelCount;
   for (let i = 0; i < sampleCount; i += 1) {
     mono[i] *= invChannelCount;
   }
@@ -303,7 +307,7 @@ export function useAudioChunker(
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const mutedGainNodeRef = useRef<GainNode | null>(null);
   const pcmQueueRef = useRef<Float32Array[]>([]);
   const queuedSampleCountRef = useRef(0);
@@ -314,11 +318,14 @@ export function useAudioChunker(
   const smoothedAudioLevelRef = useRef(0);
 
   const cleanUpAudioGraph = useCallback(() => {
-    processorNodeRef.current?.disconnect();
+    if (workletNodeRef.current) {
+      workletNodeRef.current.port.onmessage = null;
+      workletNodeRef.current.disconnect();
+    }
     sourceNodeRef.current?.disconnect();
     mutedGainNodeRef.current?.disconnect();
 
-    processorNodeRef.current = null;
+    workletNodeRef.current = null;
     sourceNodeRef.current = null;
     mutedGainNodeRef.current = null;
 
@@ -486,18 +493,44 @@ export function useAudioChunker(
       }
     }
 
+    if (!audioContext.audioWorklet) {
+      onError?.('AudioWorklet is not supported in this browser.');
+      void audioContext.close();
+      return;
+    }
+
+    try {
+      await audioContext.audioWorklet.addModule(
+        '/audio/pcm-capture-worklet.js',
+      );
+    } catch {
+      onError?.(
+        'Failed to load audio processing module. Please reload and try again.',
+      );
+      void audioContext.close();
+      return;
+    }
+
     const source = audioContext.createMediaStreamSource(streamRef.current);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const workletNode = new AudioWorkletNode(
+      audioContext,
+      'pcm-capture-processor',
+      {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      },
+    );
     const mutedGain = audioContext.createGain();
     mutedGain.gain.value = 0;
 
-    source.connect(processor);
-    processor.connect(mutedGain);
+    source.connect(workletNode);
+    workletNode.connect(mutedGain);
     mutedGain.connect(audioContext.destination);
 
     audioContextRef.current = audioContext;
     sourceNodeRef.current = source;
-    processorNodeRef.current = processor;
+    workletNodeRef.current = workletNode;
     mutedGainNodeRef.current = mutedGain;
 
     const samplesPerChunk = Math.max(
@@ -505,8 +538,8 @@ export function useAudioChunker(
       Math.round(audioContext.sampleRate * (resolvedChunkDurationMs / 1000)),
     );
 
-    processor.onaudioprocess = (event: AudioProcessingEvent) => {
-      const monoInput = downmixInputToMono(event.inputBuffer);
+    workletNode.port.onmessage = (event: MessageEvent<Float32Array[]>) => {
+      const monoInput = downmixChannelsToMono(event.data ?? []);
       if (!monoInput || monoInput.length === 0) {
         return;
       }
