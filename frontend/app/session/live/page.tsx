@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   downloadSessionPdf,
@@ -115,7 +115,7 @@ async function coerceMessageToText(data: unknown): Promise<string | null> {
   return null;
 }
 
-export default function LiveSessionPage() {
+function LiveSessionContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('sessionId');
   const mode = searchParams.get('mode') ?? 'baseline';
@@ -753,5 +753,19 @@ export default function LiveSessionPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function LiveSessionPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="glass-panel w-full max-w-3xl p-8 sm:p-12 text-center">
+          <p className="text-(--text-secondary)">Loading session...</p>
+        </div>
+      }
+    >
+      <LiveSessionContent />
+    </Suspense>
   );
 }
