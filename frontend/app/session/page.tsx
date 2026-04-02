@@ -26,6 +26,43 @@ type SessionState =
 
 const WEBSOCKET_CONNECT_TIMEOUT_MS = 10_000;
 
+function BaselineModeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      fill='none'
+      stroke='currentColor'
+      strokeWidth='1.8'
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      className={className}
+      aria-hidden='true'
+    >
+      <path d='M4 12h3l2.2-5 3.6 10 2.4-6H20' />
+      <path d='M4 19h16' />
+    </svg>
+  );
+}
+
+function ContextModeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      fill='none'
+      stroke='currentColor'
+      strokeWidth='1.8'
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      className={className}
+      aria-hidden='true'
+    >
+      <rect x='4' y='4' width='7' height='16' rx='1.5' />
+      <rect x='13' y='6' width='7' height='14' rx='1.5' />
+      <path d='M7 8h1.5M7 11h1.5M16 10h1.5M16 13h1.5' />
+    </svg>
+  );
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error';
 }
@@ -692,7 +729,7 @@ export default function SessionPage() {
                 className='flex flex-col items-center justify-center p-6 border-2 border-(--input-border) rounded-2xl hover:border-(--brand) hover:shadow-md transition-all group bg-(--input-bg) disabled:opacity-50 disabled:cursor-not-allowed'
               >
                 <div className='h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center mb-4 group-hover:bg-blue-50 transition-colors'>
-                  <span className='text-2xl'>A</span>
+                  <BaselineModeIcon className='h-6 w-6 text-slate-700' />
                 </div>
                 <h3 className='font-semibold text-lg'>Baseline</h3>
                 <p className='text-sm text-(--text-secondary) mt-2'>
@@ -706,7 +743,7 @@ export default function SessionPage() {
                 className='flex flex-col items-center justify-center p-6 border-2 border-(--input-border) rounded-2xl hover:border-(--brand) hover:shadow-md transition-all group bg-(--input-bg) disabled:opacity-50 disabled:cursor-not-allowed'
               >
                 <div className='h-12 w-12 rounded-full bg-slate-100 flex items-center justify-center mb-4 group-hover:bg-blue-50 transition-colors'>
-                  <span className='text-2xl'>C</span>
+                  <ContextModeIcon className='h-6 w-6 text-slate-700' />
                 </div>
                 <h3 className='font-semibold text-lg'>Context-Aware</h3>
                 <p className='text-sm text-(--text-secondary) mt-2'>
