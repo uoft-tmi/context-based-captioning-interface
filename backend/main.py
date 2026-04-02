@@ -29,8 +29,7 @@ app = FastAPI(
 
 
 origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    "https://context-based-captioning-interface.vercel.app/",
 ]
 
 app.add_middleware(
