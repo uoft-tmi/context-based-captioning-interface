@@ -1,11 +1,11 @@
 from contextlib import asynccontextmanager
 
 import httpx
-from app.clients.caption_model_client import ModelClient
+from app.providers.factory import build_transcription_provider
 from app.clients.pool import close_pool, create_pool
 from app.clients.supabase_client import init_supabase_client
 from app.core.config import Settings, get_settings
-from app.routers import audio_router, sessions_router
+from app.routers import audio_router, capabilities_router, sessions_router, workspace_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,10 +14,10 @@ from fastapi.middleware.cors import CORSMiddleware
 async def lifespan(app: FastAPI):
     settings: Settings = get_settings()
     await create_pool(settings.POSTGRES_URL)
-    await init_supabase_client()
     try:
-        async with httpx.AsyncClient(base_url=settings.MODEL_BASE_URL) as client:
-            app.state.model_client = ModelClient(client)
+        await init_supabase_client()
+        async with httpx.AsyncClient() as client:
+            app.state.transcription_provider = build_transcription_provider(settings, client)
             yield
     finally:
         await close_pool()
@@ -42,7 +42,9 @@ app.add_middleware(
 )
 
 app.include_router(sessions_router.router)
+app.include_router(workspace_router.router)
 app.include_router(audio_router.router)
+app.include_router(capabilities_router.router)
 
 
 @app.get("/health")

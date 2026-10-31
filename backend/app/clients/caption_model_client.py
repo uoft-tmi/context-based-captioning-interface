@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import UUID
 
 import httpx
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import ModelUnavailableError
 from app.models.caption_model import (
     FinalTranscript,
@@ -15,11 +15,16 @@ from app.models.caption_model import (
 
 
 class ModelClient:
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(self, client: httpx.AsyncClient, *, settings: Settings | None = None, base_url: str = ""):
         self._client = client
+        self._settings = settings or get_settings()
+        self._base_url = base_url.rstrip("/")
+
+    def _url(self, path: str) -> str:
+        return self._base_url + path
 
     def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {get_settings().MODEL_API_KEY}"}
+        return {"Authorization": f"Bearer {self._settings.MODEL_API_KEY}"}
 
     def _format_http_error(self, exc: httpx.HTTPStatusError) -> str:
         response = exc.response
@@ -50,7 +55,7 @@ class ModelClient:
         for attempt in range(retries):
             try:
                 resp = await self._client.post(
-                    path,
+                    self._url(path),
                     headers=self._headers(),
                     timeout=timeout,
                     **kwargs,
@@ -78,7 +83,7 @@ class ModelClient:
 
     async def health(self) -> HealthResponse:
         resp = await self._client.get(
-            "/v1/health",
+            self._url("/v1/health"),
             headers=self._headers(),
             timeout=5.0,
         )
@@ -98,7 +103,7 @@ class ModelClient:
             "/v1/process-notes",
             files={"pdf_file": ("notes.pdf", pdf_bytes, "application/pdf")},
             data={"session_id": str(session_id)},  # form field
-            timeout=get_settings().NOTES_TIMEOUT_SECONDS,
+            timeout=self._settings.NOTES_TIMEOUT_SECONDS,
         )
         return NotesResponse(**resp.json())
 
@@ -112,7 +117,7 @@ class ModelClient:
         import base64
 
         resp = await self._client.post(
-            "/v1/transcribe-chunk",
+            self._url("/v1/transcribe-chunk"),
             json={
                 "session_id": str(session_id),
                 "chunk_index": chunk_index,
@@ -120,7 +125,7 @@ class ModelClient:
                 "mode": mode,
             },
             headers=self._headers(),
-            timeout=get_settings().CHUNK_TIMEOUT_SECONDS,
+            timeout=self._settings.CHUNK_TIMEOUT_SECONDS,
         )
         try:
             resp.raise_for_status()

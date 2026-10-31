@@ -2,21 +2,19 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from app.core.db_dependencies import DBPool
-from app.database import notes_db
-from supabase import AsyncClient
+from app.ports.persistence import NotesRepository, ObjectStore
 
 logger = logging.getLogger(__name__)
 
 
 async def cleanup_storage(
     user_id: UUID,
-    db: DBPool,
-    supabase_client: AsyncClient,
+    notes: NotesRepository,
+    objects: ObjectStore,
     session_id: Optional[UUID] = None,
 ) -> None:
     """
-    Deletes note PDFs associated with the session from Supabase storage.
+    Deletes note PDFs associated with the session from object storage.
     Skips deletion if session_id is not provided.
     """
     if not session_id:
@@ -27,8 +25,7 @@ async def cleanup_storage(
         return
 
     bucket = "session-pdfs"
-    storage_keys = await notes_db.list_note_storage_keys(
-        db=db,
+    storage_keys = await notes.list_note_storage_keys(
         session_id=session_id,
         user_id=user_id,
     )
@@ -37,9 +34,8 @@ async def cleanup_storage(
         return
 
     try:
-        await supabase_client.storage.from_(bucket).remove(file_paths)
-        await notes_db.delete_all_notes(
-            db=db,
+        await objects.delete(bucket, file_paths)
+        await notes.delete_all_notes(
             session_id=session_id,
             user_id=user_id,
         )
