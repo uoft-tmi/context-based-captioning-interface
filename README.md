@@ -1,201 +1,235 @@
 # Context-Aware Lecture Captioning
 
-A web app that provides context-aware real-time lecture captioning. Users optionally upload PDF lecture notes before a session, then stream microphone audio to receive near-real-time captions and a downloadable final transcript.
+Live captions for lectures, with optional PDF notes to help the model understand course terminology. When a recording ends, you can read the transcript and download it as a PDF.
 
-## Architecture
+The app uses a **Next.js frontend**, a **FastAPI backend**, and **Supabase** for sign-in, PostgreSQL, and file storage by default. Storage and database access use separate interfaces so they can be changed independently. A separate model server handles transcription.
 
-```
-[Browser] → [Next.js / Vercel] → [FastAPI / Render] → [Model Server / GPU]
-```
+## What you need
 
-- **Frontend:** Next.js (App Router, TypeScript, Tailwind CSS) — deployed on Vercel
-- **Backend:** FastAPI — deployed on Render (Docker)
-- **Auth + DB + Storage:** Supabase (Auth, Postgres, Storage)
-- **Model:** On-demand GPU endpoint (RunPod or equivalent) — owned by model team
+- Node.js 22.13 or newer
+- Python 3.11 or newer
+- A Supabase project
+- A transcription provider: Groq, your own model server, or the mock provider for tests
 
-The frontend never calls the model server directly. All model access is proxied through the FastAPI backend.
+## Choose a transcription provider
 
-## Repository Structure
+Set `TRANSCRIPTION_PROVIDER` in `backend/.env`, then restart the backend.
 
-```
-/
-├── frontend/                      # Next.js app
-│   ├── app/
-│   │   ├── page.tsx              # Login page (Supabase Auth UI)
-│   │   └── session/
-│   │       └── page.tsx          # Session page (record, captions, download)
-│   ├── lib/
-│   │   ├── supabase.ts           # Supabase browser client
-│   │   └── api.ts                # Backend API wrapper
-│   ├── .env.local.example
-│   └── package.json
+| Value | Use it for | API key needed? |
+| --- | --- | --- |
+| `groq` | Real speech recognition using Groq's free-tier Whisper API | Yes: `GROQ_API_KEY` |
+| `mock` | Repeatable tests with synthetic captions | No |
+| `custom` | Your existing model server, including PDF notes | Your model server's credentials |
+| `wispr` | Optional Wispr Flow integration with approved API access | Yes: `WISPR_API_KEY` |
 
-├── backend/                      # FastAPI backend
-│   ├── app/
-│   │   ├── clients/
-│   │   │   ├── caption_model_client.py
-│   │   │   ├── pool.py
-│   │   │   └── supabase_client.py
-│   │   │
-│   │   ├── core/
-│   │   │   ├── auth.py
-│   │   │   ├── config.py
-│   │   │   ├── db_dependencies.py
-│   │   │   ├── dependencies.py
-│   │   │   ├── exceptions.py
-│   │   │   └── session_dependencies.py
-│   │   │
-│   │   ├── database/
-│   │   │   ├── notes_db.py
-│   │   │   └── sessions_db.py
-│   │   │
-│   │   ├── models/
-│   │   │   ├── caption_model.py
-│   │   │   └── session.py
-│   │   │
-│   │   ├── routers/
-│   │   │   ├── audio_router.py
-│   │   │   └── sessions_router.py
-│   │   │
-│   │   ├── services/
-│   │   │   ├── caption_model_service.py
-│   │   │   └── session_service.py
-│   │   │
-│   │   ├── utils/
-│   │   │   └── storage_helper.py
-│   │   │
-│   │   └── main.py
-│   │
-│   ├── migrations/
-│   ├── tests/
-│   │   └── services/
-│   │       ├── test_caption_model_service.py
-│   │       └── test_session_service.py
-│   │
-│   ├── pytest.ini
-│   ├── requirements.txt
-│   ├── requirements-dev.txt
-│   ├── .env.example
-│   └── Dockerfile
+For free-tier transcription testing, add these settings to `backend/.env`:
 
-├── CLAUDE.md                     # Full project spec
-└── README.md
+```dotenv
+TRANSCRIPTION_PROVIDER=groq
+GROQ_API_KEY=your-key-here
 ```
 
-## Getting Started
+Create a key in the [Groq console](https://console.groq.com/keys). Keep it on the backend. The existing `custom` provider remains the default until you change the setting.
 
-### Prerequisites
+Groq sends the first second of audio for an earlier first caption, then uses 3.2-second chunks with request pacing to stay within its published free-tier request limit for one continuous recording (including a final partial chunk). Limits apply across your account, so use `mock` for high-concurrency tests. Groq, Wispr, and mock currently support **audio-only baseline mode**; the UI disables PDF mode for them.
 
-- Node.js 18+
-- Python 3.11+
-- A Supabase project (for auth and database)
+**Wispr is optional, not a verified free API.** Its official documentation requires [approved access](https://api-docs.wisprflow.ai/quickstart) and describes [usage-based billing](https://api-docs.wisprflow.ai/usage_billing).
 
-### Frontend
+To test one provider without a database, sign-in, or web server, run this from `backend/` with the virtual environment active:
 
 ```bash
-cd frontend
-cp .env.local.example .env.local
-# Edit .env.local with your Supabase credentials
-
-npm install
-npm run dev
+python -m benchmarks.transcribe_audio --provider groq --audio /tmp/lecture-chunk.wav
 ```
 
-The frontend runs on [http://localhost:3000](http://localhost:3000).
+Use a short **16 kHz, mono, PCM16 WAV** file. Replace `groq` with `mock` to check the wiring without API access; mock output is synthetic. See [provider setup and dependency interfaces](docs/providers.md) for details.
 
-### Backend
+## Set up the database
+
+SQL files are in [backend/app/migrations](backend/app/migrations). For Supabase, use the top-level migrations below. For a fresh standalone PostgreSQL database such as Neon, run [postgres/001_create_tables.sql](backend/app/migrations/postgres/001_create_tables.sql) followed by [006_dashboard_library.sql](backend/app/migrations/006_dashboard_library.sql); it has no dependency on Supabase auth tables. See [persistence interfaces and switching providers](docs/persistence.md).
+
+| Your database | What to run |
+| --- | --- |
+| New Supabase project | Run migrations **001 through 006**, in order. |
+| Existing project with migration 001 already applied | Run the updated **003**, **004**, **005**, and **006**, in that order. If 003-005 are already applied, run only **006**. |
+
+You can run each file in the Supabase SQL editor. Stop recording sessions before upgrading an existing database.
+
+Migration 003 closes expired sessions and keeps the newest session if a user has multiple active sessions. Migration 005 adds the fields needed to prevent two connections from streaming into the same session.
+
+**Scheduled cleanup is optional.** Migration 002 only schedules cleanup if `pg_cron` is already enabled in Supabase. The app also checks for expired sessions itself.
+
+In Supabase Storage, create a **private** bucket named `session-pdfs` for uploaded notes. The backend creates the private `transcripts` bucket when it first saves a transcript, provided its backend secret key has permission.
+
+## Run the backend
+
+Open a terminal at the repository root:
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-
+pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env
-# Edit .env with your Supabase and model server credentials
+```
 
+Edit `backend/.env` and fill in these values:
+
+| Variable | Value to provide |
+| --- | --- |
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_SECRET_KEY` | Your Supabase secret key (`sb_secret_...`); keep it on the backend |
+| `SUPABASE_JWKS_URL` | Your project's JWKS URL for verifying sign-in tokens |
+| `POSTGRES_URL` | Your Supabase PostgreSQL connection string (or another PostgreSQL host) |
+| `TRANSCRIPTION_PROVIDER` | `groq`, `mock`, `custom`, or `wispr` |
+| `GROQ_API_KEY` | Your Groq key when using `groq` |
+
+For `custom`, also set `MODEL_BASE_URL` and `MODEL_API_KEY`. For `mock`, no transcription key is needed. The full web app still needs Supabase and PostgreSQL with every provider.
+
+Leave the other settings at their defaults to start. The backend currently expects Supabase tokens signed with ES256.
+
+Then, in the same terminal:
+
+```bash
 uvicorn main:app --reload
 ```
 
-The backend runs on [http://localhost:8000](http://localhost:8000). API docs are available at [http://localhost:8000/docs](http://localhost:8000/docs).
+The backend runs at **http://localhost:8000**. You can browse its HTTP API at **http://localhost:8000/docs**.
 
-### Database
+## Run the frontend
 
-Run the SQL migrations in `backend/app/migrations/` against your Supabase project (via the SQL editor or Supabase CLI).
+Open a **second terminal** at the repository root:
 
-## API Endpoints
+```bash
+cd frontend
+npm ci
+cp .env.local.example .env.local
+```
 
-| Method     | Endpoint                                           | Description                          |
-|------------|----------------------------------------------------|--------------------------------------|
-| GET        | `/api/sessions`                                    | Get All Sessions                     |
-| POST       | `/api/sessions`                                    | Create Session                       |
-| GET        | `/api/sessions/active`                             | Get Active Session                   |
-| GET        | `/api/sessions/{session_id}`                       | Get Session                          |
-| GET        | `/api/sessions/{session_id}/notes`                 | List Notes                           |
-| POST       | `/api/sessions/{session_id}/notes`                 | Upload Note                          |
-| DELETE     | `/api/sessions/{session_id}/notes/{filename}`      | Delete Note                          |
-| GET        | `/api/sessions/{session_id}/notes/{filename}`      | Download Note                        |
-| POST       | `/api/sessions/{session_id}/end`                   | End Session                          |
-| POST       | `/api/sessions/{session_id}/error`                 | Mark Session Error                   |
-| GET        | `/api/sessions/{session_id}/download`              | Download Session Pdf                 |
-| GET        | `/health`                                         | Health Check                         |
-| WEBSOCKET  | `/ws/sessions/{session_id}/stream`                 | Stream Audio & Receive Live Captions |
+Edit `frontend/.env.local`:
 
-## How It Works
+| Variable | Value to provide |
+| --- | --- |
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Your Supabase publishable key (`sb_publishable_...`) |
+| `NEXT_PUBLIC_BACKEND_BASE_URL` | `http://localhost:8000` for local development |
 
-1. **Sign in** via Supabase Auth (email/password)
-2. **Create a session** — choose baseline (audio only) or context mode (with notes)
-3. **Upload PDF notes** (context mode only) — backend forwards to model for processing
-4. **Record audio** — microphone audio is captured in 3-second chunks, base64-encoded, and sent to the backend
-5. **View captions** — the backend proxies each chunk to the model server and returns partial transcription text
-6. **Stop & download** — finalize the session to get the full transcript as a downloadable text file
+Next.js explicitly exposes only `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` to the browser through `next.config.ts`. Keep `SUPABASE_SECRET_KEY` and `SUPABASE_JWKS_URL` in the backend configuration. Restart development servers or rebuild after changing frontend values. Legacy frontend key variable names remain supported as fallbacks.
 
-Sessions are limited to 5 minutes max, with 1 active session per user.
+Then, in that terminal:
 
-## Environment Variables
+```bash
+npm run dev
+```
+
+Open **http://localhost:3000**.
+
+## Use the app
+
+1. Sign in to open the **Dashboard**, which lists active and past sessions.
+2. Select **Create session**, provide a unique name, and choose a captioning mode.
+3. Open **Session details** to upload optional PDF files and review the recording allowance.
+4. Continue to **Recording**, start your microphone, and watch captions appear.
+5. Stop recording, or let the recording allowance end it automatically. The **Transcript** page displays the saved text and a formatted PDF download.
+
+Free users can record **30 seconds per session**. Paid status is administrator-managed; paid users get `MAX_SESSION_DURATION_SECONDS` (one hour by default). Only one session can be active per user. Preparation does not consume recording allowance.
+
+Sessions, transcripts, and uploaded files remain available until explicit deletion. The **File library** groups uploaded PDFs by session. See [workspace setup, retention, and paid-plan administration](docs/workspace.md).
+
+## Run the tests
 
 ### Frontend
 
-| Variable | Description |
-|----------|-------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
-| `NEXT_PUBLIC_BACKEND_BASE_URL` | Backend URL (default: `http://localhost:8000`) |
+From `frontend/`:
+
+```bash
+npm test
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+These checks cover the streaming message flow, type checking, code quality, and the production build.
 
 ### Backend
 
-| Variable                    | Description                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `SUPABASE_URL`              | Supabase project URL                                        |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only; keep secret)   |
-| `SUPABASE_JWT_JWKS_URL`     | Supabase JWKS URL used to verify JWTs                       |
-| `SUPABASE_AUDIENCE`         | Expected audience (`aud`) claim for Supabase JWTs           |
-| `POSTGRES_URL`              | PostgreSQL connection string                                |
-| `MODEL_BASE_URL`            | Base URL of the model server                                |
-| `MODEL_API_KEY`             | API key for authenticating with the model server            |
-| `MAX_SESSION_SECONDS`       | Maximum session duration in seconds (default: 3600)         |
-| `MAX_CONCURRENT_SESSIONS`   | Maximum number of concurrent sessions allowed (default: 20) |
-| `SESSION_TIMEOUT_SECONDS`   | Inactivity timeout before a session is considered idle      |
-| `EXPIRY_SLIDE_SECONDS`      | Time window to extend session expiry on activity            |
-| `MAX_PDF_SIZE`              | Maximum allowed PDF upload size in bytes (default: 10MB)    |
-| `MAX_NOTES_PER_SESSION`     | Maximum number of notes allowed per session                 |
-| `CHUNK_TIMEOUT_SECONDS`     | Timeout for processing individual chunks                    |
-| `NOTES_TIMEOUT_SECONDS`     | Timeout for processing notes                                |
+From `backend/`, with the virtual environment active:
 
-
-## Deployment
-
-**Backend (Render):**
 ```bash
-cd backend
-flyctl launch
-fly secrets set SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... MODEL_BASE_URL=... MODEL_API_KEY=...
-fly deploy
+python -m pytest -q
 ```
 
-**Frontend (Vercel):**
-Connect the repo via Vercel Git integration. Set the root directory to `frontend/` and configure environment variables in the Vercel dashboard.
+Unit tests run without external services. They include REST notes operations and streaming transcript saving with replacement object stores and repositories. PostgreSQL integration tests are skipped unless you set `TEST_DATABASE_URL`; when enabled, they run against both the Supabase-compatible and standalone PostgreSQL schemas.
 
-## Current Status
+To include the integration tests, start a local PostgreSQL server and run:
 
-This is the MVP v1 scaffolding. Route handlers return stub responses. See `CLAUDE.md` for the full specification.
+```bash
+TEST_DATABASE_URL=postgresql://localhost/postgres python -m pytest -q -s
+```
+
+Replace the connection string if your local server uses a different user, password, or port. The database user must be allowed to create databases. Each test creates and removes its own temporary database.
+
+Backend tests disable dotenv loading and use synthetic settings. The backend also has isolated streaming tests that replace transcription, caption storage, session state, and token verification through interfaces. These run without PostgreSQL or Supabase.
+
+The integration tests use **real PostgreSQL and WebSocket connections**, with simulated authentication, file storage, and model responses. They check session ownership, duplicate connections, expiry, notes uploads, failure handling, and transcript downloads.
+
+## Test concurrent sessions and latency
+
+The latency test checks whether the backend can handle **N sessions at once** while keeping **p95 chunk-to-transcript latency below X milliseconds**.
+
+For example, a 500 ms p95 budget means at least 95% of audio chunks must receive their matching captions within 500 ms of being sent. This measurement excludes the time spent collecting microphone audio, starting the session, and saving the final transcript.
+
+From `backend/`, with the virtual environment active and local PostgreSQL running:
+
+```bash
+TEST_DATABASE_URL=postgresql://localhost/postgres \
+LATENCY_SESSIONS=20 \
+LATENCY_P95_MS=500 \
+python -m pytest -m latency -q -s
+```
+
+Change these settings to choose your workload:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `LATENCY_SESSIONS` | `20` | Number of simultaneous sessions |
+| `LATENCY_P95_MS` | `500` | Maximum allowed p95 latency, in milliseconds |
+| `LATENCY_CHUNKS` | `10` | Audio chunks sent per session |
+| `LATENCY_INTERVAL_MS` | `30` | Time between chunks, in milliseconds |
+| `LATENCY_MODEL_DELAY_MS` | `20` | Simulated model response time, in milliseconds |
+
+The test fails if the p95 budget is exceeded, responses are missing or out of order, or a session fails. It also checks that every session finishes without leaving an active session behind.
+
+**This is a backend regression test.** Its simulated model response does not measure real GPU inference speed or transcription accuracy.
+
+### Measure latency with the real model
+
+Use the load-test script against a running backend to include real model response times. High-concurrency runs can exceed a hosted provider's free quota; start with one session when testing Groq. You need:
+
+- One valid Supabase access token per test user, saved as a JSON array in a file outside this repository. Each token must belong to a different user without an active session.
+- A representative audio chunk in **16 kHz, mono, PCM16 WAV** format.
+
+From `backend/`, with the virtual environment active:
+
+```bash
+python -m benchmarks.stream_latency \
+  --base-url http://localhost:8000 \
+  --tokens-file /tmp/caption-test-tokens.json \
+  --audio /tmp/lecture-chunk.wav \
+  --sessions 20 \
+  --chunks 10 \
+  --interval-ms 2500 \
+  --p95-ms 2000 \
+  --output /tmp/caption-latency.json
+```
+
+Replace the URL and file paths as needed. The script creates and ends baseline sessions for those users.
+
+The report includes p50, p95, p99, maximum latency, finalization time, and any failures. The command exits with an error if the run is incomplete or exceeds your p95 budget. The example's **2000 ms** budget is a threshold you choose, not a measured performance claim.
+
+## Operational notes
+
+- A recording waits for the model and uploaded notes to be ready before sending microphone audio.
+- Stopping waits for the final audio and transcript to be saved before showing the download button.
+- A crashed streaming worker requires a new session; resuming the old recording is not supported.
+- Database pool limits apply to each backend process. Set `DB_POOL_MAX_SIZE` with your total worker count and PostgreSQL connection limit in mind.
+- WebSocket authentication uses a token in the connection URL. Redact query strings in server and proxy logs so tokens are not recorded.
