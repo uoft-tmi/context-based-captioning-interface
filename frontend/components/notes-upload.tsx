@@ -1,181 +1,65 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useRef, useState } from 'react';
 import { uploadSessionNote } from '@/lib/api';
+import { Icon, Notice } from '@/components/ui';
 
 interface NotesUploadProps {
   sessionId: string;
   onSuccess: () => void;
   onCancel: () => void;
+  onSkip: () => void;
+  disabled?: boolean;
+  compact?: boolean;
 }
 
-export default function NotesUpload({
-  sessionId,
-  onSuccess,
-  onCancel,
-}: NotesUploadProps) {
+export default function NotesUpload({ sessionId, onSuccess, onCancel, onSkip, disabled = false, compact = false }: NotesUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [error, setError] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const uploading = useRef(false);
+  const locked = isUploading || disabled;
 
-  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
-  const isPdfFile = (candidate: File) => {
-    const hasPdfMime = candidate.type === 'application/pdf';
-    const hasPdfExtension = candidate.name.toLowerCase().endsWith('.pdf');
-    return hasPdfMime || hasPdfExtension;
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setErrorMsg(null);
-    const selected = e.target.files?.[0];
-    if (!selected) return;
-
-    if (!isPdfFile(selected)) {
-      setErrorMsg('Please select a valid PDF file.');
-      return;
+  function selectFile(candidate?: File) {
+    if (locked) return;
+    setError('');
+    setFile(null);
+    if (!candidate) return;
+    if (candidate.type !== 'application/pdf' && !candidate.name.toLowerCase().endsWith('.pdf')) {
+      setError('Please choose a PDF. You can export your notes or slides as a PDF first.');
+    } else if (candidate.size === 0) {
+      setError('This file is empty. Please choose another PDF.');
+    } else if (candidate.size > 10 * 1024 * 1024) {
+      setError('This PDF is over 10 MB. Choose a smaller file or compress it first.');
+    } else {
+      setFile(candidate);
     }
+  }
 
-    if (selected.size > MAX_FILE_SIZE) {
-      setErrorMsg('File size exceeds 10MB limit.');
-      return;
-    }
-
-    setFile(selected);
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setErrorMsg(null);
-
-    const dropped =
-      e.dataTransfer.items?.[0]?.getAsFile() ?? e.dataTransfer.files?.[0];
-    if (!dropped) return;
-
-    if (!isPdfFile(dropped)) {
-      setErrorMsg('Please drop a valid PDF file.');
-      return;
-    }
-    if (dropped.size > MAX_FILE_SIZE) {
-      setErrorMsg('File size exceeds 10MB limit.');
-      return;
-    }
-
-    setFile(dropped);
-  };
-
-  const handleUploadAndContinue = async () => {
-    if (!file) {
-      setErrorMsg('No file selected.');
-      return;
-    }
-
+  async function upload() {
+    if (!file || locked || uploading.current) return;
+    uploading.current = true;
     setIsUploading(true);
-    setErrorMsg(null);
-
+    setError('');
     try {
       await uploadSessionNote(sessionId, file);
-
       onSuccess();
-    } catch (err: unknown) {
-      console.error(err);
-      setErrorMsg(
-        err instanceof Error ? err.message : 'An error occurred during upload.',
-      );
-      setIsUploading(false);
-    }
-  };
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Upload failed. Please try again.');
+    } finally { setIsUploading(false); uploading.current = false; }
+  }
 
-  return (
-    <div className='space-y-6 text-center w-full'>
-      <h2 className='text-2xl font-bold text-foreground'>
-        Upload Course Notes
-      </h2>
-      <p className='text-(--text-secondary)'>
-        Upload PDF notes for this session to improve model accuracy. Max 10MB.
-      </p>
-
-      {/* Hidden File Input */}
-      <input
-        type='file'
-        accept='.pdf,application/pdf'
-        className='hidden'
-        ref={fileInputRef}
-        onChange={handleFileSelect}
-      />
-
-      <div
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onClick={() => !file && fileInputRef.current?.click()}
-        className={`border-2 border-dashed rounded-2xl p-12 mt-8 flex flex-col items-center justify-center transition-all w-full ${
-          file
-            ? 'border-(--brand) bg-(--brand) bg-opacity-5'
-            : 'border-(--input-border) bg-(--input-bg) hover:border-(--brand) cursor-pointer'
-        }`}
-      >
-        <span className='text-4xl mb-4'>{file ? '📝' : '📄'}</span>
-
-        {file ? (
-          <div className='space-y-4 text-center'>
-            <p className='text-sm font-semibold text-foreground break-all max-w-64 mx-auto'>
-              {file.name}
-            </p>
-            <p className='text-xs text-(--text-secondary)'>
-              {(file.size / (1024 * 1024)).toFixed(2)} MB
-            </p>
-            {!isUploading && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setFile(null);
-                }}
-                className='text-xs text-red-500 hover:text-red-700 underline font-medium'
-              >
-                Remove File
-              </button>
-            )}
-          </div>
-        ) : (
-          <>
-            <p className='text-sm font-medium mb-4'>
-              Click to browse or drag PDF here.
-            </p>
-            <button className='px-6 py-2 bg-(--brand) text-(--brand-text) font-semibold rounded-full shadow hover:bg-(--brand-accent) transition-colors pointer-events-none'>
-              Select File
-            </button>
-          </>
-        )}
-      </div>
-
-      {errorMsg && (
-        <p className='text-sm text-red-500 font-medium'>{errorMsg}</p>
-      )}
-
-      <div className='pt-4 flex justify-between items-center w-full'>
-        <button
-          onClick={onCancel}
-          disabled={isUploading}
-          className='text-sm font-medium text-(--text-secondary) hover:text-foreground px-4 py-2 disabled:opacity-50'
-        >
-          Cancel Session
-        </button>
-
-        <button
-          onClick={handleUploadAndContinue}
-          disabled={isUploading || !file}
-          className='text-sm font-medium px-6 py-2 bg-(--brand) text-(--brand-text) rounded-full shadow hover:bg-(--brand-accent) transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
-        >
-          {isUploading ? 'Uploading...' : 'Upload & Continue'}
-        </button>
-      </div>
+  return <div className="upload-content" aria-busy={isUploading}>
+    <input id="lecture-pdf" type="file" accept=".pdf,application/pdf" className="file-input" ref={fileInput} disabled={locked} aria-label="Choose lecture notes PDF" aria-describedby="pdf-help" onChange={(event) => { selectFile(event.target.files?.[0]); event.target.value = ''; }} />
+    <div className={`dropzone ${dragging ? 'dragging' : ''}`} onDragOver={(event) => { event.preventDefault(); if (!locked) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); if (event.dataTransfer.files.length > 1) { setError('Please choose one PDF for this lecture.'); return; } selectFile(event.dataTransfer.files[0]); }}>
+      <span className="upload-icon"><Icon name={file ? 'file' : 'upload'} width="24" height="24" /></span>
+      {file ? <><p className="file-name">{file.name}</p><p className="muted small">{(file.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload</p><button className="text-link" disabled={locked} onClick={() => { setFile(null); setError(''); fileInput.current?.focus(); }}>Remove file</button></> : <><p className="small">Drag your PDF here, or <button className="text-link" disabled={locked} onClick={() => fileInput.current?.click()}>browse files</button></p><p id="pdf-help" className="muted small">One PDF, up to 10 MB</p></>}
     </div>
-  );
+    {file && <p id="pdf-help" className="muted small" style={{ marginTop: 10 }}>One PDF, up to 10 MB</p>}
+    {error && <div style={{ marginTop: 16 }}><Notice tone="error">{error}</Notice></div>}
+    <div className="upload-actions">{!compact && <button className="btn btn-ghost" onClick={onSkip} disabled={locked}>Skip for now</button>}<button className="btn btn-primary" disabled={locked || !file} onClick={() => void upload()}>{isUploading ? <><span className="spinner" />Uploading notes…</> : <>{compact ? 'Upload file' : 'Upload and continue'} <Icon name="arrow" width="16" height="16" /></>}</button></div>
+    {!compact && <div style={{ marginTop: 17 }}><button className="text-link" disabled={locked} onClick={onCancel}>Cancel session</button></div>}
+  </div>;
 }

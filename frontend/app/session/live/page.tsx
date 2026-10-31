@@ -1,816 +1,267 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
-import {
-  downloadSessionPdf,
-  endSession,
-  getSessionDetails,
-  getSessionStreamUrlsWithAuth,
-  markSessionError,
-  type StreamChunkPayload,
-  type StreamServerMessage,
-} from '@/lib/api';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { downloadSessionPdf, endSession, getProviderCapabilities, getSessionDetails, getSessionStreamUrlWithAuth, type ProviderCapabilities, type SessionSummary } from '@/lib/api';
 import { useAudioChunker, type AudioChunk } from '@/lib/audio/useAudioChunker';
+import { CaptionStream } from '@/lib/stream-client';
+import { Icon, Loading, Notice, Steps } from '@/components/ui';
 
-type LiveState =
-  | 'CONNECTING'
-  | 'STREAMING'
-  | 'FINALIZING'
-  | 'COMPLETE'
-  | 'ERROR';
-
-const WEBSOCKET_CONNECT_TIMEOUT_MS = 10_000;
-const TRANSCRIPT_READY_MAX_POLLS = 20;
-const TRANSCRIPT_READY_POLL_DELAY_MS = 500;
-
-function BaselineModeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.8'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className={className}
-      aria-hidden='true'
-    >
-      <path d='M4 12h3l2.2-5 3.6 10 2.4-6H20' />
-      <path d='M4 19h16' />
-    </svg>
-  );
-}
-
-function ContextModeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.8'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className={className}
-      aria-hidden='true'
-    >
-      <rect x='4' y='4' width='7' height='16' rx='1.5' />
-      <rect x='13' y='6' width='7' height='14' rx='1.5' />
-      <path d='M7 8h1.5M7 11h1.5M16 10h1.5M16 13h1.5' />
-    </svg>
-  );
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown error';
-}
-
-function parseStreamMessage(raw: string): StreamServerMessage {
-  try {
-    const parsed = JSON.parse(raw) as StreamServerMessage & {
-      type?: string;
-      text?: string;
-    };
-
-    if (parsed.type === 'error') {
-      return {
-        ...parsed,
-        error: parsed.error ?? parsed.text,
-      };
-    }
-
-    if (parsed.type === 'final') {
-      return {
-        ...parsed,
-        final_text: parsed.final_text ?? parsed.text,
-        is_final: true,
-      };
-    }
-
-    if (parsed.type === 'caption') {
-      return {
-        ...parsed,
-        partial_text: parsed.partial_text ?? parsed.text,
-      };
-    }
-
-    return parsed;
-  } catch {
-    return { partial_text: raw };
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForTranscriptReady(sessionId: string): Promise<boolean> {
-  for (let attempt = 0; attempt < TRANSCRIPT_READY_MAX_POLLS; attempt += 1) {
-    try {
-      const details = await getSessionDetails(sessionId);
-      if (
-        typeof details === 'object' &&
-        details !== null &&
-        'transcript_key' in details &&
-        typeof (details as Record<string, unknown>).transcript_key ===
-          'string' &&
-        ((details as Record<string, unknown>).transcript_key as string).length >
-          0
-      ) {
-        return true;
-      }
-    } catch {
-      // Ignore transient polling errors; retry until timeout.
-    }
-    await sleep(TRANSCRIPT_READY_POLL_DELAY_MS);
-  }
-  return false;
-}
-
-async function coerceMessageToText(data: unknown): Promise<string | null> {
-  if (typeof data === 'string') {
-    return data;
-  }
-
-  if (data instanceof Blob) {
-    return data.text();
-  }
-
-  if (data instanceof ArrayBuffer) {
-    return new TextDecoder().decode(new Uint8Array(data));
-  }
-
-  if (ArrayBuffer.isView(data)) {
-    const view = data as ArrayBufferView;
-    return new TextDecoder().decode(
-      new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
-    );
-  }
-
-  return null;
-}
+type State = 'LOADING' | 'READY' | 'CONNECTING' | 'STREAMING' | 'FINALIZING' | 'COMPLETE' | 'ERROR';
 
 function LiveSessionContent() {
-  const searchParams = useSearchParams();
-  const sessionId = searchParams.get('sessionId');
-  const mode = searchParams.get('mode') ?? 'baseline';
+  const router = useRouter();
+  const sessionId = useSearchParams().get('sessionId');
+  const [capabilities, setCapabilities] = useState<ProviderCapabilities | null>(null);
+  const [session, setSession] = useState<SessionSummary | null>(null);
+  const [state, setState] = useState<State>('LOADING');
+  const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');
+  const [captions, setCaptions] = useState<string[]>([]);
+  const [finalTranscript, setFinalTranscript] = useState<string | null>(null);
+  const [latencies, setLatencies] = useState<number[]>([]);
+  const [downloading, setDownloading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [textSize, setTextSize] = useState(22);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [following, setFollowing] = useState(true);
+  const [elapsed, setElapsed] = useState(0);
+  const [canRetryMic, setCanRetryMic] = useState(false);
+  const stream = useRef<CaptionStream | null>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const captionBody = useRef<HTMLDivElement>(null);
+  const recordingStarted = useRef(0);
+  const mounted = useRef(true);
+  const starting = useRef(false);
+  const finishing = useRef(false);
+  const cancellingRef = useRef(false);
 
-  const [liveState, setLiveState] = useState<LiveState>('CONNECTING');
-  const [statusMsg, setStatusMsg] = useState('Preparing recording...');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [liveCaption, setLiveCaption] = useState('');
-  const [finalCaptions, setFinalCaptions] = useState<string[]>([]);
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  const mountedRef = useRef(true);
-  const socketRef = useRef<WebSocket | null>(null);
-  const lifecycleRef = useRef<'idle' | 'ending' | 'ended' | 'errored'>('idle');
-  const finalizePendingRef = useRef(false);
-  const manualSocketCloseRef = useRef(false);
-  const downloadUrlRef = useRef<string | null>(null);
-  const failureHandlerRef = useRef<(reason: string, details?: string) => void>(
-    () => {
-      // Assigned by effect.
-    },
-  );
-
-  const closeStreamingSocket = useCallback((code: number, reason: string) => {
-    const ws = socketRef.current;
-    if (!ws) {
-      return;
-    }
-
-    ws.onopen = null;
-    ws.onmessage = null;
-    ws.onerror = null;
-    ws.onclose = null;
-
-    if (
-      ws.readyState === WebSocket.OPEN ||
-      ws.readyState === WebSocket.CONNECTING
-    ) {
-      try {
-        ws.close(code, reason);
-      } catch {
-        // Ignore socket close errors during teardown.
-      }
-    }
-
-    socketRef.current = null;
+  const sendChunk = useCallback(async (chunk: AudioChunk) => {
+    if (!stream.current) throw new Error('Captioning stream is not connected.');
+    await stream.current.sendChunk({ chunk_index: chunk.chunkIndex, audio: chunk.audio, capturedAtMs: chunk.capturedAtMs });
   }, []);
-
-  const sendAudioChunk = useCallback(
-    async (chunk: AudioChunk): Promise<void> => {
-      const ws = socketRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        throw new Error('Streaming connection is not open.');
-      }
-
-      const payload: StreamChunkPayload = {
-        type: 'audio_chunk',
-        chunk_index: chunk.chunkIndex,
-        audio_b64: chunk.audioB64,
-        mime: chunk.mime,
-        elapsed_ms: chunk.elapsedMs,
-        created_at: chunk.createdAt,
-      };
-
-      ws.send(JSON.stringify(payload));
-    },
-    [],
-  );
-
-  const {
-    isRecording,
-    audioLevel,
-    permissionStatus,
-    chunkCount,
-    lastChunkSizeBytes,
-    requestPermission,
-    start,
-    stop,
-  } = useAudioChunker({
-    onChunk: sendAudioChunk,
-    onWarning: (message) => {
-      setStatusMsg(message);
-      if (message.toLowerCase().includes('dropped')) {
-        failureHandlerRef.current(
-          'Audio chunk streaming was interrupted.',
-          message,
-        );
-      }
-    },
-    onError: (message) => {
-      failureHandlerRef.current('Audio capture failed.', message);
-    },
-    chunkDurationMs: 2500,
-  });
-
-  const requestPermissionRef = useRef(requestPermission);
-  const startRef = useRef(start);
+  const audio = useAudioChunker({ chunkDurationMs: capabilities?.recommended_chunk_ms ?? 2500, initialChunkDurationMs: capabilities?.initial_chunk_ms ?? undefined, minRequestIntervalMs: capabilities?.min_request_interval_ms ?? 0, onChunk: sendChunk, onError: (message) => {
+    if (!mounted.current) return;
+    setError(message);
+    setState('ERROR');
+    setCanRetryMic(false);
+    stream.current?.close();
+    audio.stop();
+  } });
+  const { stop, flushAndStop } = audio;
+  const active = state === 'STREAMING' || state === 'FINALIZING' || state === 'CONNECTING';
 
   useEffect(() => {
-    requestPermissionRef.current = requestPermission;
-  }, [requestPermission]);
+    mounted.current = true;
+    return () => { mounted.current = false; stream.current?.close(); stop(); };
+  }, [stop]);
 
   useEffect(() => {
-    startRef.current = start;
-  }, [start]);
-
-  const finalizeAsError = useCallback(
-    async (reason: string, details?: string) => {
-      if (!sessionId) {
-        setErrorMsg(`${reason}${details ? ` ${details}` : ''}`);
-        setLiveState('ERROR');
-        return;
-      }
-
-      if (finalizePendingRef.current || lifecycleRef.current !== 'idle') {
-        if (lifecycleRef.current === 'errored') {
-          setLiveState('ERROR');
-        }
-        return;
-      }
-
-      finalizePendingRef.current = true;
-      lifecycleRef.current = 'errored';
-      manualSocketCloseRef.current = true;
-      setErrorMsg(`${reason}${details ? ` ${details}` : ''}`);
-      setStatusMsg('Marking session as failed...');
-      setLiveState('FINALIZING');
-
-      stop();
-      closeStreamingSocket(4000, 'session_error');
-
-      try {
-        await markSessionError(sessionId, {
-          reason,
-          details,
-          source: 'frontend-live-page',
-        });
-      } catch (error) {
-        console.error('Failed to mark session as error:', error);
-      } finally {
-        finalizePendingRef.current = false;
-        if (!mountedRef.current) {
-          return;
-        }
-        setLiveState('ERROR');
-      }
-    },
-    [closeStreamingSocket, sessionId, stop],
-  );
-
-  const finalizeAsEnded = useCallback(async () => {
-    if (!sessionId) {
-      return;
-    }
-
-    if (finalizePendingRef.current || lifecycleRef.current === 'ended') {
-      return;
-    }
-
-    if (lifecycleRef.current === 'errored') {
-      setLiveState('ERROR');
-      return;
-    }
-
-    finalizePendingRef.current = true;
-    lifecycleRef.current = 'ending';
-    manualSocketCloseRef.current = true;
-    setStatusMsg('Ending session...');
-    setLiveState('FINALIZING');
-
-    stop();
-    closeStreamingSocket(1000, 'session_end');
-
-    try {
-      await endSession(sessionId);
-      lifecycleRef.current = 'ended';
-
-      if (!mountedRef.current) {
-        return;
-      }
-
-      setStatusMsg('Finalizing transcript...');
-      const transcriptReady = await waitForTranscriptReady(sessionId);
-
-      if (!mountedRef.current) {
-        return;
-      }
-
-      if (transcriptReady) {
-        setStatusMsg('Session ended successfully. Transcript is ready.');
-      } else {
-        setStatusMsg(
-          'Session ended. Transcript is still processing; try download again in a moment.',
-        );
-      }
-      setLiveState('COMPLETE');
-    } catch (error) {
-      const message = getErrorMessage(error);
-      lifecycleRef.current = 'errored';
-      setErrorMsg(`Failed to end session gracefully. ${message}`);
-      setLiveState('ERROR');
-    } finally {
-      finalizePendingRef.current = false;
-    }
-  }, [closeStreamingSocket, sessionId, stop]);
-
-  const handleUnexpectedFailure = useCallback(
-    (reason: string, details?: string) => {
-      if (lifecycleRef.current !== 'idle') {
-        return;
-      }
-      void finalizeAsError(reason, details);
-    },
-    [finalizeAsError],
-  );
-
-  useEffect(() => {
-    failureHandlerRef.current = handleUnexpectedFailure;
-  }, [handleUnexpectedFailure]);
-
-  const connectSocket = useCallback(
-    async (streamUrl: string): Promise<WebSocket> => {
-      return new Promise<WebSocket>((resolve, reject) => {
-        const ws = new WebSocket(streamUrl);
-        let settled = false;
-
-        const timeout = window.setTimeout(() => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          try {
-            ws.close(4001, 'connect_timeout');
-          } catch {
-            // Ignore close errors during timeout path.
-          }
-          reject(
-            new Error('Timed out connecting to the transcription stream.'),
-          );
-        }, WEBSOCKET_CONNECT_TIMEOUT_MS);
-
-        ws.onopen = () => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          window.clearTimeout(timeout);
-          resolve(ws);
-        };
-
-        ws.onerror = () => {
-          if (settled) {
-            return;
-          }
-          // Let onclose provide a richer code/reason when available.
-        };
-
-        ws.onclose = (event) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          window.clearTimeout(timeout);
-          reject(
-            new Error(
-              `WebSocket closed before opening (${streamUrl}) code ${event.code}${
-                event.reason ? `: ${event.reason}` : ''
-              }`,
-            ),
-          );
-        };
-      });
-    },
-    [],
-  );
-
-  const handleDownloadPdf = useCallback(async () => {
-    if (!sessionId) {
-      return;
-    }
-
-    setIsDownloading(true);
-
-    try {
-      const blob = await downloadSessionPdf(sessionId);
-      const objectUrl = URL.createObjectURL(blob);
-
-      if (downloadUrlRef.current) {
-        URL.revokeObjectURL(downloadUrlRef.current);
-      }
-      downloadUrlRef.current = objectUrl;
-
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      anchor.download = `session-${sessionId}.pdf`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-    } catch (error) {
-      setErrorMsg(`Failed to download session PDF. ${getErrorMessage(error)}`);
-    } finally {
-      setIsDownloading(false);
-    }
+    let cancelled = false;
+    if (!sessionId) return;
+    void Promise.all([getSessionDetails(sessionId), getProviderCapabilities()]).then(([details, provider]) => {
+      if (cancelled) return;
+      setSession(details);
+      setCapabilities(provider);
+      if (details.mode === 'context' && !provider.supports_pdf_notes && details.is_active) {
+        setError('This provider cannot use lecture notes. Return to setup, cancel this session, and choose Audio only.');
+        setState('ERROR');
+      } else if (details.transcript_key && !details.is_active) setState('COMPLETE');
+      else if (!details.is_active || new Date(details.expires_at).getTime() <= Date.now()) {
+        setError('This session has ended. Return to setup to start a new lecture.');
+        setState('ERROR');
+      } else setState('READY');
+    }).catch((error: unknown) => {
+      if (!cancelled) { setError(error instanceof Error ? error.message : 'Unable to load the session.'); setState('ERROR'); }
+    });
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId) {
-      setErrorMsg('Missing session id. Start a new session first.');
-      setLiveState('ERROR');
-      return;
-    }
-
-    let cancelled = false;
-
-    const startLiveStream = async () => {
-      setStatusMsg('Requesting microphone permission...');
-
-      try {
-        const permissionGranted = await requestPermissionRef.current();
-        if (!permissionGranted) {
-          throw new Error(
-            'Microphone permission was denied or no microphone was detected.',
-          );
-        }
-
-        setStatusMsg('Connecting to live transcription stream...');
-
-        const streamUrls = await getSessionStreamUrlsWithAuth(sessionId);
-        let ws: WebSocket | null = null;
-        const connectFailures: string[] = [];
-
-        for (const streamUrl of streamUrls) {
-          try {
-            ws = await connectSocket(streamUrl);
-            break;
-          } catch (connectError) {
-            connectFailures.push(getErrorMessage(connectError));
-          }
-        }
-
-        if (!ws) {
-          throw new Error(
-            `WebSocket connection failed. ${connectFailures.join(' | ')}`,
-          );
-        }
-
-        if (cancelled) {
-          ws.close(1000, 'cancelled_before_start');
-          return;
-        }
-
-        socketRef.current = ws;
-        manualSocketCloseRef.current = false;
-
-        ws.onmessage = (event: MessageEvent) => {
-          void (async () => {
-            const raw = await coerceMessageToText(event.data);
-            if (!raw) {
-              return;
-            }
-
-            const message = parseStreamMessage(raw);
-
-            if (message.error || message.detail) {
-              handleUnexpectedFailure(
-                'Backend stream reported an error.',
-                message.error ?? message.detail,
-              );
-              return;
-            }
-
-            const incomingText =
-              message.final_text ??
-              message.partial_text ??
-              message.text ??
-              message.caption;
-
-            if (incomingText && incomingText.trim().length > 0) {
-              if (message.is_final || message.final_text) {
-                setFinalCaptions((prev) => [...prev, incomingText]);
-                setLiveCaption('');
-              } else {
-                setLiveCaption(incomingText);
-              }
-            }
-
-            if (message.done) {
-              void finalizeAsEnded();
-            }
-          })();
-        };
-
-        ws.onerror = () => {
-          handleUnexpectedFailure('Streaming connection encountered an error.');
-        };
-
-        ws.onclose = (event) => {
-          socketRef.current = null;
-
-          if (manualSocketCloseRef.current || lifecycleRef.current !== 'idle') {
-            return;
-          }
-
-          handleUnexpectedFailure(
-            'Streaming connection was interrupted.',
-            `Close code ${event.code}${event.reason ? `: ${event.reason}` : ''}`,
-          );
-        };
-
-        setStatusMsg('Starting microphone capture...');
-        await startRef.current();
-
-        if (!cancelled && lifecycleRef.current === 'idle') {
-          setLiveState('STREAMING');
-          setStatusMsg('Recording in progress.');
-        }
-      } catch (error) {
-        handleUnexpectedFailure(
-          'Unable to start recording.',
-          getErrorMessage(error),
-        );
-      }
-    };
-
-    void startLiveStream();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [connectSocket, finalizeAsEnded, handleUnexpectedFailure, sessionId]);
+    if (!active) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, [active]);
 
   useEffect(() => {
-    mountedRef.current = true;
+    if (state !== 'STREAMING') return;
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - recordingStarted.current) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [state]);
 
-    return () => {
-      mountedRef.current = false;
-      manualSocketCloseRef.current = true;
-      closeStreamingSocket(1001, 'component_unmount');
+  useEffect(() => {
+    if (following && captionBody.current) captionBody.current.scrollTop = captionBody.current.scrollHeight;
+  }, [captions, finalTranscript, following, textSize]);
+
+  useEffect(() => {
+    const onFullscreen = () => setFullscreen(document.fullscreenElement === panel.current);
+    document.addEventListener('fullscreenchange', onFullscreen);
+    return () => document.removeEventListener('fullscreenchange', onFullscreen);
+  }, []);
+
+  async function startRecording() {
+    if (!sessionId || starting.current) return;
+    starting.current = true;
+    setState('CONNECTING');
+    setError('');
+    setWarning('');
+    setCanRetryMic(false);
+    let microphoneReady = false;
+    try {
+      // Ask for permission before the backend's inactivity timer starts.
+      if (!await audio.prepare() || !mounted.current) return;
+      microphoneReady = true;
+      const url = await getSessionStreamUrlWithAuth(sessionId);
+      if (!mounted.current) return;
+      const client = new CaptionStream({
+        onReady: (limit) => setSession((previous) => previous ? { ...previous, recording_limit_seconds: limit } : previous),
+        onCaption: (text, _index, latencyMs) => {
+          if (!mounted.current) return;
+          setCaptions((previous) => [...previous, text]);
+          setLatencies((previous) => [...previous, latencyMs]);
+        },
+        onFinal: (text) => {
+          stop();
+          if (!mounted.current) return;
+          setFinalTranscript(text);
+          setState('COMPLETE');
+          router.replace(`/session/${sessionId}/transcript`);
+        },
+        onWarning: (text) => { if (mounted.current) setWarning(text); },
+        onError: (error) => {
+          stop();
+          if (mounted.current) { setError(error.message); setState('ERROR'); setCanRetryMic(false); }
+        },
+      });
+      stream.current = client;
+      await client.connect(url);
+      if (!mounted.current) { client.close(); return; }
+      await audio.start();
+      if (mounted.current && client.isActive) {
+        recordingStarted.current = Date.now();
+        setElapsed(0);
+        setState('STREAMING');
+      }
+    } catch (error) {
+      stream.current?.close();
       stop();
-
-      if (sessionId && lifecycleRef.current === 'idle') {
-        lifecycleRef.current = 'errored';
-        void markSessionError(sessionId, {
-          reason: 'component_unmounted',
-          details: 'Live recording page unmounted before session finalization.',
-          source: 'frontend-live-page',
-        }).catch((error) => {
-          console.error('Failed to mark session error on unmount:', error);
-        });
+      if (mounted.current) {
+        const permissionDenied = error instanceof Error && ['NotAllowedError', 'PermissionDeniedError'].includes(error.name);
+        setError(permissionDenied ? 'Microphone access is blocked. Allow microphone access in your browser’s site settings, then try again.' : error instanceof Error ? error.message : 'Unable to start recording. Check your microphone and try again.');
+        setCanRetryMic(!microphoneReady);
+        setState('ERROR');
       }
+    } finally { starting.current = false; }
+  }
 
-      if (downloadUrlRef.current) {
-        URL.revokeObjectURL(downloadUrlRef.current);
-        downloadUrlRef.current = null;
-      }
-    };
-  }, [closeStreamingSocket, sessionId, stop]);
+  const finish = useCallback(async () => {
+    if (finishing.current) return;
+    finishing.current = true;
+    setState('FINALIZING');
+    try {
+      await flushAndStop();
+      await stream.current?.finish();
+    } catch (error) {
+      stream.current?.close();
+      stop();
+      if (mounted.current) { setError(error instanceof Error ? error.message : 'Unable to save the transcript.'); setCanRetryMic(false); setState('ERROR'); }
+    } finally { finishing.current = false; }
+  }, [flushAndStop, stop]);
 
   useEffect(() => {
-    const handleOffline = () => {
-      if (sessionId && lifecycleRef.current === 'idle') {
-        handleUnexpectedFailure(
-          'Network connection dropped.',
-          'Browser is offline.',
-        );
-      }
-    };
+    if (state !== 'STREAMING' || !session) return;
+    const remaining = session.recording_limit_seconds * 1000 - (Date.now() - recordingStarted.current);
+    const timer = setTimeout(() => void finish(), Math.max(0, remaining));
+    return () => clearTimeout(timer);
+  }, [state, session, finish]);
 
-    window.addEventListener('offline', handleOffline);
-    return () => window.removeEventListener('offline', handleOffline);
-  }, [handleUnexpectedFailure, sessionId]);
+  function saveBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
-  const pulseTransform = `scale(${1 + Math.min(audioLevel, 1) * 0.9})`;
-  const pulseGlow = `${20 + Math.round(audioLevel * 50)}px`;
-  const audioLevelPercent = Math.max(0, Math.min(100, audioLevel * 100));
+  async function download() {
+    if (!sessionId || downloading) return;
+    setDownloading(true);
+    setError('');
+    try { saveBlob(await downloadSessionPdf(sessionId), `lecture-transcript-${session?.created_at.slice(0, 10) ?? sessionId}.pdf`); }
+    catch (error) { setError(error instanceof Error ? error.message : 'Unable to download the transcript. Please try again.'); }
+    finally { setDownloading(false); }
+  }
 
-  return (
-    <div className='glass-panel w-full max-w-3xl p-8 sm:p-12 space-y-8 relative overflow-hidden'>
-      <div className='absolute top-0 right-0 -mr-12 -mt-12 w-48 h-48 rounded-full bg-(--brand) opacity-5 blur-3xl'></div>
-      <div className='absolute bottom-0 left-0 -ml-12 -mb-12 w-48 h-48 rounded-full bg-(--brand-accent) opacity-5 blur-3xl'></div>
+  async function cancel() {
+    if (!sessionId || cancellingRef.current) return;
+    cancellingRef.current = true;
+    setCancelling(true);
+    setError('');
+    try { await endSession(sessionId); router.push('/session'); }
+    catch (error) { setError(error instanceof Error ? error.message : 'Unable to cancel the session.'); }
+    finally { setCancelling(false); cancellingRef.current = false; }
+  }
 
-      <div className='relative z-10 w-full space-y-6'>
-        <div className='text-center'>
-          <h2 className='text-2xl font-bold text-foreground'>
-            Live Audio Session
-          </h2>
-          <p className='text-(--text-secondary) flex items-center justify-center gap-2'>
-            {mode === 'context' ? (
-              <>
-                <ContextModeIcon className='h-4 w-4' />
-                <span>Context mode with uploaded notes.</span>
-              </>
-            ) : (
-              <>
-                <BaselineModeIcon className='h-4 w-4' />
-                <span>Baseline mode.</span>
-              </>
-            )}
-          </p>
-          <p className='text-sm text-(--text-secondary)'>{statusMsg}</p>
-        </div>
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (panel.current?.requestFullscreen) await panel.current.requestFullscreen();
+      else setWarning('Full screen is unavailable in this browser. You can still increase the caption text size.');
+    } catch { setWarning('Full screen could not open. You can still increase the caption text size.'); }
+  }
 
-        {(liveState === 'CONNECTING' ||
-          liveState === 'STREAMING' ||
-          liveState === 'FINALIZING') && (
-          <>
-            <div className='text-center'>
-              <p className='text-sm text-(--text-secondary)'>
-                Chunk {chunkCount} | Mic: {permissionStatus}
-              </p>
-            </div>
+  const transcript = finalTranscript ?? captions.join('\n');
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const p95 = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)];
+  const complete = state === 'COMPLETE';
+  const status = { LOADING: 'Loading', READY: 'Ready to begin', CONNECTING: 'Connecting', STREAMING: 'Recording', FINALIZING: 'Saving transcript', COMPLETE: 'Transcript saved', ERROR: 'Recording unavailable' }[state];
+  const time = `${Math.floor(elapsed / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}`;
 
-            <div className='flex justify-center'>
-              <div className='relative h-48 w-48 flex items-center justify-center'>
-                <div className='absolute inset-0 rounded-full border border-(--brand) opacity-20 animate-ping'></div>
-                <div
-                  className='h-28 w-28 rounded-full bg-(--brand) transition-all duration-100 ease-out'
-                  style={{
-                    transform: pulseTransform,
-                    boxShadow: `0 0 ${pulseGlow} rgba(59,130,246,0.65)`,
-                  }}
-                />
-                <div className='absolute text-(--brand-text) font-semibold text-sm'>
-                  REC
-                </div>
-              </div>
-            </div>
+  if (!sessionId) return <><Steps current={0} /><Notice tone="error">No lecture was selected. Return to setup to begin.</Notice><button className="btn btn-primary" onClick={() => router.push('/session')}>Back to setup <Icon name="arrow" /></button></>;
+  if (state === 'LOADING') return <><Steps current={1} /><Loading>Opening your lecture…</Loading></>;
 
-            <div className='grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm'>
-              <div className='rounded-xl border border-(--input-border) bg-(--input-bg) p-3 text-center'>
-                <p className='text-(--text-secondary)'>Audio Level</p>
-                <p className='font-semibold text-lg'>
-                  {audioLevelPercent.toFixed(1)}%
-                </p>
-              </div>
-              <div className='rounded-xl border border-(--input-border) bg-(--input-bg) p-3 text-center'>
-                <p className='text-(--text-secondary)'>Last Chunk Size</p>
-                <p className='font-semibold text-lg'>
-                  {lastChunkSizeBytes
-                    ? `${Math.round(lastChunkSizeBytes / 1024)} KB`
-                    : '-'}
-                </p>
-              </div>
-            </div>
-
-            <div className='rounded-2xl border border-(--input-border) bg-(--input-bg) p-4 space-y-4'>
-              <div>
-                <p className='text-xs uppercase tracking-wide text-(--text-secondary) mb-1'>
-                  Live Caption
-                </p>
-                <p className='min-h-10 text-foreground'>
-                  {liveCaption || 'Listening...'}
-                </p>
-              </div>
-
-              <div>
-                <p className='text-xs uppercase tracking-wide text-(--text-secondary) mb-1'>
-                  Transcript
-                </p>
-                <div className='max-h-56 overflow-y-auto rounded-xl border border-(--input-border) bg-white/60 dark:bg-slate-900/30 p-3 space-y-2'>
-                  {finalCaptions.length === 0 && (
-                    <p className='text-sm text-(--text-secondary)'>
-                      No finalized lines yet.
-                    </p>
-                  )}
-                  {finalCaptions.map((caption, index) => (
-                    <p
-                      key={`${index}-${caption.slice(0, 12)}`}
-                      className='text-sm text-foreground'
-                    >
-                      {caption}
-                    </p>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className='flex justify-center'>
-              <button
-                onClick={() => {
-                  void finalizeAsEnded();
-                }}
-                disabled={finalizePendingRef.current || !isRecording}
-                className='px-8 py-3 bg-red-600 text-white font-bold rounded-full shadow hover:bg-red-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed'
-              >
-                Stop Recording
-              </button>
-            </div>
-          </>
-        )}
-
-        {liveState === 'COMPLETE' && (
-          <>
-            <div className='text-center'>
-              <h3 className='text-xl font-bold text-foreground'>
-                Session Complete
-              </h3>
-              <p className='text-(--text-secondary)'>
-                Recording stopped and session ended cleanly.
-              </p>
-            </div>
-            <div className='flex flex-wrap gap-3 justify-center'>
-              <button
-                onClick={() => {
-                  void handleDownloadPdf();
-                }}
-                disabled={isDownloading}
-                className='px-6 py-2 bg-(--brand) text-(--brand-text) font-semibold rounded-full shadow hover:bg-(--brand-accent) transition-colors disabled:opacity-60'
-              >
-                {isDownloading ? 'Downloading...' : 'Download Session PDF'}
-              </button>
-              <button
-                onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.location.replace('/session');
-                  }
-                }}
-                className='px-6 py-2 border border-(--input-border) rounded-full hover:bg-(--card-bg) transition-colors'
-              >
-                Back to Session
-              </button>
-            </div>
-          </>
-        )}
-
-        {liveState === 'ERROR' && (
-          <div className='space-y-6 text-center text-red-600'>
-            <h3 className='text-xl font-bold'>Error</h3>
-            <p className='text-sm bg-red-50 p-4 rounded-xl border border-red-200'>
-              {errorMsg || 'An unknown error occurred.'}
-            </p>
-            <button
-              onClick={() => {
-                if (typeof window !== 'undefined') {
-                  window.location.replace('/session');
-                }
-              }}
-              className='px-8 py-3 bg-red-600 text-white font-bold rounded-full shadow hover:bg-red-700 transition-colors mt-2 mx-auto block'
-            >
-              Back to Session
-            </button>
-          </div>
-        )}
+  return <section>
+    <Steps current={complete ? 3 : 2} />
+    <div className="caption-heading page-heading"><div><p className="eyebrow">{complete ? 'Lecture complete' : 'Your lecture, in words'}</p><h1>{session?.name ?? (complete ? 'Your transcript is ready.' : 'Live lecture captions')}</h1><p className="muted small">{complete ? 'Saved and ready to take with you.' : 'Start your microphone, then focus on teaching.'}</p></div>
+      <span role="status" className={`status-pill ${state === 'STREAMING' ? 'status-recording' : state === 'ERROR' ? 'status-neutral' : ''}`}><span className="status-dot" />{status}{state === 'STREAMING' && <span aria-label="Recording duration"> · {time}</span>}</span>
+    </div>
+    {session && !complete && <p className="plan-caption">Recording allowance: {Math.floor(session.recording_limit_seconds / 60).toString().padStart(2, '0')}:{(session.recording_limit_seconds % 60).toString().padStart(2, '0')} · Recording stops and saves automatically.</p>}
+    {capabilities?.name === 'mock'  && <Notice tone="warning"><strong>Demo mode.</strong> These are sample captions, not a transcription of your speech.</Notice>}
+    {error && <Notice tone="error">{error}</Notice>}
+    {warning && <Notice tone="warning">{warning}</Notice>}
+    {state === 'ERROR' && <Notice>{transcript ? 'The transcript has not been confirmed as saved. You can download the visible captions below to keep a copy.' : 'Your microphone is off. Return to setup to continue.'}</Notice>}
+    <div ref={panel} className="panel caption-panel">
+      <div className="caption-toolbar"><h2 id="caption-title">{complete ? 'Lecture transcript' : 'Captions'}</h2><div className="toolbar-controls">
+        <label className="size-label"><span>Text size</span><select aria-label="Caption text size" value={textSize} onChange={(event) => setTextSize(Number(event.target.value))}><option value={22}>Standard</option><option value={28}>Large</option><option value={36}>Extra large</option></select></label>
+        <button className="icon-button" title={fullscreen ? 'Exit full screen' : 'Full screen captions'} aria-label={fullscreen ? 'Exit full screen' : 'Full screen captions'} onClick={() => void toggleFullscreen()}><Icon name={fullscreen ? 'close' : 'expand'} width="17" height="17" /></button>
+      </div></div>
+      <div ref={captionBody} className="caption-body" role="region" aria-labelledby="caption-title" tabIndex={0} onScroll={(event) => { const element = event.currentTarget; setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 64); }}>
+        {transcript ? <div className="caption-text" style={{ fontSize: textSize }}>{finalTranscript !== null ? <p>{finalTranscript}</p> : <div role="log" aria-label="Live captions" aria-live="polite" aria-relevant="additions">{captions.map((text, index) => <p key={index} className="caption-paragraph">{text}</p>)}</div>}</div> : <div className="caption-empty"><span className="empty-icon"><Icon name={complete ? 'file' : 'captions'} width="28" height="28" /></span><h2>{complete ? finalTranscript === '' ? 'No speech was captured' : 'Your transcript is saved' : state === 'STREAMING' ? 'Listening to your lecture…' : state === 'CONNECTING' ? 'Getting everything ready…' : state === 'FINALIZING' ? 'Saving your transcript…' : state === 'ERROR' ? 'Captioning has stopped' : 'A clear space for your words.'}</h2><p>{complete ? finalTranscript === '' ? 'The saved PDF is available below.' : 'Download the PDF below to read your saved lecture transcript.' : state === 'STREAMING' ? 'Your captions will appear here as you speak. The first words may take a few seconds.' : state === 'CONNECTING' ? 'Allow microphone access if asked. The captioning service may take a moment to prepare.' : state === 'FINALIZING' ? 'Please keep this tab open while your transcript is saved.' : state === 'ERROR' ? 'Check the message above for your next step.' : 'Once you start recording, your lecture will appear here as easy-to-read captions.'}</p></div>}
+      </div>
+      {!following && transcript && <div style={{ textAlign: 'center', paddingBottom: 12 }}><button className="btn btn-secondary btn-small" onClick={() => setFollowing(true)}>Jump to latest captions</button></div>}
+      <div className="recording-bar">
+        <div className="recording-info"><span className="mic-status"><Icon name={complete ? 'check' : 'mic'} width="18" height="18" /></span><div><p className="recording-label">{complete ? 'Transcript saved' : state === 'STREAMING' ? 'Microphone is on' : state === 'CONNECTING' ? 'Preparing your microphone' : state === 'FINALIZING' ? 'Microphone is off · Saving' : 'Microphone is off'}</p>
+          {state === 'STREAMING' ? <div role="meter" aria-label="Microphone level" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(audio.audioLevel * 100)} className="mic-meter"><div style={{ width: `${audio.audioLevel * 100}%` }} /></div> : <p className="recording-hint">{complete ? 'Download a copy for your records.' : state === 'CONNECTING' ? 'Waiting for the captioning service…' : state === 'FINALIZING' ? 'Keep this page open until saving finishes.' : 'You control when recording starts.'}</p>}
+        </div></div>
+        {state === 'READY' && <button className="btn btn-primary" disabled={cancelling} onClick={() => void startRecording()}><Icon name="mic" width="17" height="17" />Start recording</button>}
+        {state === 'CONNECTING' && <button className="btn btn-secondary" disabled><span className="spinner" />Connecting…</button>}
+        {state === 'STREAMING' && <button className="btn btn-danger" disabled={!audio.isRecording} onClick={() => void finish()}><Icon name="stop" width="16" height="16" />Stop and save transcript</button>}
+        {state === 'FINALIZING' && <button className="btn btn-secondary" disabled><span className="spinner" />Saving transcript…</button>}
+        {complete && <button className="btn btn-primary" disabled={downloading} onClick={() => void download()}>{downloading ? <span className="spinner" /> : <Icon name="download" width="17" height="17" />}{downloading ? 'Downloading…' : 'Download transcript PDF'}</button>}
+        {state === 'ERROR' && canRetryMic && <button className="btn btn-primary" onClick={() => void startRecording()}><Icon name="mic" width="17" height="17" />Try microphone again</button>}
+        {state === 'ERROR' && transcript && <button className="btn btn-secondary" onClick={() => saveBlob(new Blob([transcript], { type: 'text/plain;charset=utf-8' }), 'lecture-captions-unsaved.txt')}><Icon name="download" width="17" height="17" />Download visible captions</button>}
       </div>
     </div>
-  );
+    <div className="caption-footnote"><span>{complete ? 'You can start a new lecture whenever you’re ready.' : active ? 'Keep this tab open. Stop recording to save your transcript.' : 'Your browser will ask for microphone access when you start.'}</span>
+      {state === 'READY' && <button className="text-link" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? 'Cancelling…' : 'Cancel session'}</button>}
+      {(complete || state === 'ERROR') && <button className="text-link" onClick={() => router.push('/session')}>{complete ? 'Start another lecture' : 'Back to setup'}</button>}
+    </div>
+    {latencies.length > 0 && <details className="diagnostics"><summary>Captioning details</summary><div className="diagnostic-values"><span>Audio segments: <strong>{audio.chunkCount}</strong></span><span>Captions: <strong>{captions.length}</strong></span><span>p95 caption delay: <strong>{p95 === undefined ? '—' : `${Math.round(p95)} ms`}</strong></span></div><p>Caption delay is estimated from the first audio sample in a segment to its caption response, including audio collection and queuing. The first segment is {(capabilities?.initial_chunk_ms ?? capabilities?.recommended_chunk_ms ?? 2500) / 1000} seconds; later segments are {(capabilities?.recommended_chunk_ms ?? 2500) / 1000} seconds.</p></details>}
+  </section>;
 }
 
 export default function LiveSessionPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="glass-panel w-full max-w-3xl p-8 sm:p-12 text-center">
-          <p className="text-(--text-secondary)">Loading session...</p>
-        </div>
-      }
-    >
-      <LiveSessionContent />
-    </Suspense>
-  );
+  return <Suspense fallback={<Loading>Opening your lecture…</Loading>}><LiveSessionContent /></Suspense>;
 }

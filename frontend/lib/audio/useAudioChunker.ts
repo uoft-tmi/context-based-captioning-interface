@@ -1,89 +1,28 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-/**
- * Audio chunk MIME type.
- * - "audio/webm": Most browser support, smaller size
- * - "audio/wav": Lossless, larger size
- */
-export type ChunkerMime = 'audio/webm' | 'audio/wav';
-
-type PermissionStatus = 'idle' | 'granted' | 'denied' | 'error';
+import { AudioChunkBuffer } from './chunk-buffer';
+import { AudioRequestPacer } from './request-pacer';
 
 export interface AudioChunk {
   chunkIndex: number;
-  audioB64: string;
-  mime: ChunkerMime;
+  audio: Blob;
+  capturedAtMs: number;
+  mime: 'audio/wav';
   blobSizeBytes: number;
-  elapsedMs: number;
-  driftMs: number;
-  createdAt: string;
 }
-
-interface UseAudioChunkerOptions {
-  onChunk: (chunk: AudioChunk) => Promise<void> | void;
-  onWarning?: (message: string) => void;
-  onError?: (message: string) => void;
+interface Options {
+  onChunk: (chunk: AudioChunk) => Promise<void>;
+  onError: (message: string) => void;
   chunkDurationMs?: number;
-  preferredMimeType?: ChunkerMime;
-  oversizedChunkWarningBytes?: number;
-  chunkFailureRetryCount?: number;
-  chunkFailureRetryDelayMs?: number;
+  initialChunkDurationMs?: number;
+  minRequestIntervalMs?: number;
 }
-
-interface UseAudioChunkerResult {
-  isRecording: boolean;
-  audioLevel: number;
-  permissionStatus: PermissionStatus;
-  chunkCount: number;
-  lastChunkSizeBytes: number | null;
-  requestPermission: () => Promise<boolean>;
-  start: () => Promise<void>;
-  stop: () => void;
-}
-
-const DEFAULT_CHUNK_DURATION_MS = 2500;
-const MIN_CHUNK_DURATION_MS = 2000;
-const MAX_CHUNK_DURATION_MS = 3000;
-const DEFAULT_OVERSIZED_WARNING_BYTES = 512 * 1024;
-const DEFAULT_CHUNK_FAILURE_RETRY_COUNT = 1;
-const DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS = 300;
 const TARGET_SAMPLE_RATE = 16_000;
 const METER_EPSILON = 1e-8;
 const MIN_METER_DB = -90;
 const MAX_METER_DB = -20;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onloadend = () => {
-      const result = reader.result;
-      if (typeof result !== 'string') {
-        reject(new Error('Failed to encode audio chunk as base64'));
-        return;
-      }
-
-      const base64 = result.split(',')[1];
-      if (!base64) {
-        reject(new Error('Missing base64 payload from audio chunk'));
-        return;
-      }
-
-      resolve(base64);
-    };
-
-    reader.onerror = () => reject(new Error('Unable to read audio chunk'));
-    reader.readAsDataURL(blob);
-  });
-}
+const MAX_QUEUED_CHUNKS = 3;
 
 function downsampleTo16k(
   input: Float32Array,
@@ -157,32 +96,6 @@ function encodeMonoPcm16Wav(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-function consumeSamples(
-  queue: Float32Array[],
-  sampleCount: number,
-): Float32Array {
-  const out = new Float32Array(sampleCount);
-  let offset = 0;
-
-  while (offset < sampleCount && queue.length > 0) {
-    const head = queue[0];
-    const needed = sampleCount - offset;
-
-    if (head.length <= needed) {
-      out.set(head, offset);
-      offset += head.length;
-      queue.shift();
-      continue;
-    }
-
-    out.set(head.subarray(0, needed), offset);
-    queue[0] = head.subarray(needed);
-    offset += needed;
-  }
-
-  return out;
-}
-
 function downmixChannelsToMono(channels: Float32Array[]): Float32Array {
   const channelCount = channels.length;
   const sampleCount = channels[0]?.length ?? 0;
@@ -238,457 +151,157 @@ function computeAudioLevel(samples: Float32Array): number {
   return Math.max(0, Math.min(1, normalized));
 }
 
-export function useAudioChunker(
-  options: UseAudioChunkerOptions,
-): UseAudioChunkerResult {
-  /**
-   * Custom hook for microphone audio capture and chunking.
-   *
-   * Usage:
-   * ```
-   * const { isRecording, permissionStatus, start, stop, requestPermission } = useAudioChunker({
-   *   onChunk: async (chunk) => {
-   *     console.log(`Chunk ${chunk.chunkIndex}: ${chunk.blobSizeBytes} bytes, drift ${chunk.driftMs}ms`);
-   *     // Send chunk to backend: await sendChunk(sessionId, chunk);
-   *   },
-   *   chunkDurationMs: 2500,
-   *   onWarning: (msg) => console.warn(msg),
-   *   onError: (msg) => console.error(msg),
-   * });
-   *
-   * // Request permission first
-   * await requestPermission();
-   *
-   * // Start recording (emits chunks every ~2.5 seconds by default)
-   * await start();
-   *
-   * // Stop recording
-   * stop();
-   * ```
-   *
-   * Options:
-   * - onChunk: Called for each captured chunk (required).
-   * - chunkDurationMs: Chunk interval in ms (default 2500, clamped to 2000-3000).
-   * - preferredMimeType: Input preference only. Captured output is always "audio/wav" for backend compatibility.
-   * - onWarning, onError: Optional logging callbacks.
-   *
-   * Returns:
-   * - isRecording: True if currently recording.
-   * - permissionStatus: "idle" | "granted" | "denied" | "error".
-   * - chunkCount: Number of chunks captured so far.
-   * - lastChunkSizeBytes: Size of most recent chunk in bytes.
-   * - requestPermission() / start() / stop(): Control recording.
-   */
-  const {
-    onChunk,
-    onWarning,
-    onError,
-    chunkDurationMs = DEFAULT_CHUNK_DURATION_MS,
-    preferredMimeType = 'audio/webm',
-    oversizedChunkWarningBytes = DEFAULT_OVERSIZED_WARNING_BYTES,
-    chunkFailureRetryCount = DEFAULT_CHUNK_FAILURE_RETRY_COUNT,
-    chunkFailureRetryDelayMs = DEFAULT_CHUNK_FAILURE_RETRY_DELAY_MS,
-  } = options;
-
-  const resolvedChunkDurationMs = Math.min(
-    MAX_CHUNK_DURATION_MS,
-    Math.max(MIN_CHUNK_DURATION_MS, chunkDurationMs),
-  );
-
+export function useAudioChunker({ onChunk, onError, chunkDurationMs = 2500, initialChunkDurationMs, minRequestIntervalMs = 0 }: Options) {
   const [isRecording, setIsRecording] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
-  const [permissionStatus, setPermissionStatus] =
-    useState<PermissionStatus>('idle');
   const [chunkCount, setChunkCount] = useState(0);
-  const [lastChunkSizeBytes, setLastChunkSizeBytes] = useState<number | null>(
-    null,
-  );
+  const callbacks = useRef({ onChunk, onError });
+  useEffect(() => { callbacks.current = { onChunk, onError }; }, [onChunk, onError]);
+  const stream = useRef<MediaStream | null>(null);
+  const context = useRef<AudioContext | null>(null);
+  const source = useRef<MediaStreamAudioSourceNode | null>(null);
+  const worklet = useRef<AudioWorkletNode | null>(null);
+  const gain = useRef<GainNode | null>(null);
+  const buffer = useRef<AudioChunkBuffer | null>(null);
+  const pacer = useRef<AudioRequestPacer | null>(null);
+  const index = useRef(0);
+  const generation = useRef(0);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const queuedChunks = useRef(0);
+  const failure = useRef<Error | null>(null);
 
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const mutedGainNodeRef = useRef<GainNode | null>(null);
-  const pcmQueueRef = useRef<Float32Array[]>([]);
-  const queuedSampleCountRef = useRef(0);
-  const chunkIndexRef = useRef(0);
-  const sessionStartedAtRef = useRef<number | null>(null);
-  const lastChunkAtRef = useRef<number | null>(null);
-  const stopRequestedRef = useRef(false);
-  const smoothedAudioLevelRef = useRef(0);
-
-  const cleanUpAudioGraph = useCallback(() => {
-    if (workletNodeRef.current) {
-      workletNodeRef.current.port.onmessage = null;
-      workletNodeRef.current.disconnect();
-    }
-    sourceNodeRef.current?.disconnect();
-    mutedGainNodeRef.current?.disconnect();
-
-    workletNodeRef.current = null;
-    sourceNodeRef.current = null;
-    mutedGainNodeRef.current = null;
-
-    const ctx = audioContextRef.current;
-    audioContextRef.current = null;
-    if (ctx) {
-      void ctx.close();
-    }
-
-    pcmQueueRef.current = [];
-    queuedSampleCountRef.current = 0;
-  }, []);
-
-  const cleanUpStream = useCallback(() => {
-    if (!streamRef.current) {
-      return;
-    }
-
-    streamRef.current.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  }, []);
-
-  const requestPermission = useCallback(async (): Promise<boolean> => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setPermissionStatus('error');
-      onError?.('Microphone capture is not supported in this browser.');
+  const prepare = useCallback(async () => {
+    const captureGeneration = generation.current;
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone capture requires HTTPS (or localhost).');
+    // Resume in the user's click handler before waiting for model initialization.
+    const ctx = new AudioContext();
+    context.current = ctx;
+    await ctx.resume();
+    if (captureGeneration !== generation.current) return false;
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    if (captureGeneration !== generation.current) {
+      mic.getTracks().forEach((track) => track.stop());
       return false;
     }
+    stream.current = mic;
+    return true;
+  }, []);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: { ideal: 1 },
-          sampleRate: { ideal: TARGET_SAMPLE_RATE },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      const hasAudioTrack = stream.getAudioTracks().length > 0;
-      if (!hasAudioTrack) {
-        stream.getTracks().forEach((track) => track.stop());
-        setPermissionStatus('error');
-        onError?.('No microphone input was detected.');
-        return false;
-      }
-
-      cleanUpStream();
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = true;
-      });
-      streamRef.current = stream;
-      setPermissionStatus('granted');
-      return true;
-    } catch (error) {
-      let message = 'Unable to access microphone.';
-      let nextStatus: PermissionStatus = 'error';
-
-      if (error instanceof DOMException) {
-        switch (error.name) {
-          case 'NotAllowedError':
-            message = 'Microphone permission was denied.';
-            nextStatus = 'denied';
-            break;
-          case 'NotFoundError':
-            message = 'No microphone was found on this device.';
-            break;
-          case 'NotReadableError':
-            message = 'Microphone is already in use by another application.';
-            break;
-          case 'AbortError':
-            message = 'Microphone capture was interrupted. Please try again.';
-            break;
-          case 'OverconstrainedError':
-            message = 'Microphone settings are unsupported on this device.';
-            break;
-          case 'SecurityError':
-            message =
-              'Microphone access is blocked by browser security settings.';
-            break;
-          default:
-            message = 'Unable to access microphone.';
-            break;
-        }
-      }
-
-      setPermissionStatus(nextStatus);
-      onError?.(message);
-      return false;
-    }
-  }, [cleanUpStream, onError]);
+  const release = useCallback(() => {
+    if (worklet.current) worklet.current.port.onmessage = null;
+    source.current?.disconnect();
+    worklet.current?.disconnect();
+    gain.current?.disconnect();
+    stream.current?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
+    stream.current = null;
+    if (context.current) void context.current.close();
+    context.current = null;
+    source.current = null;
+    worklet.current = null;
+    gain.current = null;
+    buffer.current = null;
+  }, []);
 
   const stop = useCallback(() => {
-    stopRequestedRef.current = true;
-    smoothedAudioLevelRef.current = 0;
-
+    generation.current += 1;
+    release();
     setIsRecording(false);
     setAudioLevel(0);
-    cleanUpAudioGraph();
-    cleanUpStream();
-  }, [cleanUpAudioGraph, cleanUpStream]);
+  }, [release]);
+
+  const enqueue = useCallback((pcm: Float32Array, sampleRate: number, capturedAtMs: number, finalChunk = false) => {
+    if (queuedChunks.current >= MAX_QUEUED_CHUNKS) {
+      failure.current = new Error('Captioning is falling behind. Please stop and try again.');
+      callbacks.current.onError(failure.current.message);
+      return;
+    }
+    const chunkIndex = index.current++;
+    const captureGeneration = generation.current;
+    const requestPacer = pacer.current;
+    const wav = encodeMonoPcm16Wav(downsampleTo16k(pcm, sampleRate), TARGET_SAMPLE_RATE);
+    setChunkCount(index.current);
+    queuedChunks.current += 1;
+    // Keep one acknowledged request in flight and a bounded queue behind it.
+    queue.current = queue.current.then(async () => {
+      if (captureGeneration !== generation.current) return;
+      // A final partial segment may use the one reserved request at stop.
+      if (!finalChunk) await requestPacer?.wait();
+      if (captureGeneration !== generation.current) return;
+      requestPacer?.markSent();
+      await callbacks.current.onChunk({ chunkIndex, audio: wav, capturedAtMs, mime: 'audio/wav', blobSizeBytes: wav.size });
+    }).catch((error: unknown) => {
+      if (captureGeneration !== generation.current) return;
+      failure.current = error instanceof Error ? error : new Error('Unable to send audio.');
+      callbacks.current.onError(failure.current.message);
+    }).finally(() => { if (captureGeneration === generation.current) queuedChunks.current -= 1; });
+  }, []);
+
+  const flushAndStop = useCallback(async () => {
+    // Preserve the last partial chunk, then wait for all caption acknowledgements.
+    const remaining = buffer.current?.flush();
+    if (context.current && remaining) {
+      enqueue(remaining.samples, context.current.sampleRate, remaining.capturedAtMs, true);
+    }
+    release();
+    setIsRecording(false);
+    setAudioLevel(0);
+    await queue.current;
+    if (failure.current) throw failure.current;
+  }, [enqueue, release]);
 
   const start = useCallback(async () => {
-    if (isRecording) {
-      return;
-    }
-
-    const hasPermission =
-      permissionStatus === 'granted' || (await requestPermission());
-
-    if (!hasPermission || !streamRef.current) {
-      return;
-    }
-
-    const AudioCtx =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!AudioCtx) {
-      onError?.('Web Audio API is not available in this browser.');
-      return;
-    }
-
-    chunkIndexRef.current = 0;
-    sessionStartedAtRef.current = null;
-    lastChunkAtRef.current = null;
+    const captureGeneration = ++generation.current;
+    queue.current = Promise.resolve();
+    queuedChunks.current = 0;
+    failure.current = null;
+    index.current = 0;
+    pacer.current = new AudioRequestPacer(minRequestIntervalMs);
     setChunkCount(0);
-    setLastChunkSizeBytes(null);
-    setAudioLevel(0);
-    smoothedAudioLevelRef.current = 0;
-    stopRequestedRef.current = false;
-
-    if (chunkDurationMs !== resolvedChunkDurationMs) {
-      onWarning?.(
-        `Chunk duration ${chunkDurationMs}ms is outside the supported ${MIN_CHUNK_DURATION_MS}-${MAX_CHUNK_DURATION_MS}ms range. Using ${resolvedChunkDurationMs}ms.`,
-      );
-    }
-
-    if (preferredMimeType !== 'audio/wav') {
-      onWarning?.(
-        'Captured audio is always emitted as 16kHz mono WAV for backend compatibility.',
-      );
-    }
-
-    let audioContext: AudioContext;
     try {
-      audioContext = new AudioCtx();
-    } catch {
-      onError?.(
-        'Failed to initialize audio processing. Please reload and try again.',
-      );
-      return;
-    }
-
-    if (audioContext.state === 'suspended') {
-      try {
-        await audioContext.resume();
-      } catch {
-        onError?.(
-          'Audio context is suspended. Interact with the page and try recording again.',
-        );
-        void audioContext.close();
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone capture requires a supported browser and HTTPS (or localhost).');
+      const mic = stream.current ?? await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      if (captureGeneration !== generation.current) {
+        mic.getTracks().forEach((track) => track.stop());
         return;
       }
-    }
-
-    if (!audioContext.audioWorklet) {
-      onError?.('AudioWorklet is not supported in this browser.');
-      void audioContext.close();
-      return;
-    }
-
-    try {
-      await audioContext.audioWorklet.addModule(
-        '/audio/pcm-capture-worklet.js',
-      );
-    } catch {
-      onError?.(
-        'Failed to load audio processing module. Please reload and try again.',
-      );
-      void audioContext.close();
-      return;
-    }
-
-    const source = audioContext.createMediaStreamSource(streamRef.current);
-    const workletNode = new AudioWorkletNode(
-      audioContext,
-      'pcm-capture-processor',
-      {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-      },
-    );
-    const mutedGain = audioContext.createGain();
-    mutedGain.gain.value = 0;
-
-    source.connect(workletNode);
-    workletNode.connect(mutedGain);
-    mutedGain.connect(audioContext.destination);
-
-    audioContextRef.current = audioContext;
-    sourceNodeRef.current = source;
-    workletNodeRef.current = workletNode;
-    mutedGainNodeRef.current = mutedGain;
-
-    const samplesPerChunk = Math.max(
-      1,
-      Math.round(audioContext.sampleRate * (resolvedChunkDurationMs / 1000)),
-    );
-
-    workletNode.port.onmessage = (event: MessageEvent<Float32Array[]>) => {
-      const monoInput = downmixChannelsToMono(event.data ?? []);
-      if (!monoInput || monoInput.length === 0) {
-        return;
-      }
-
-      const normalizedLevel = computeAudioLevel(monoInput);
-      const smoothedLevel =
-        smoothedAudioLevelRef.current * 0.8 + normalizedLevel * 0.2;
-      smoothedAudioLevelRef.current = smoothedLevel;
-      setAudioLevel(smoothedLevel);
-
-      const copied = new Float32Array(monoInput.length);
-      copied.set(monoInput);
-      pcmQueueRef.current.push(copied);
-      queuedSampleCountRef.current += copied.length;
-
-      while (queuedSampleCountRef.current >= samplesPerChunk) {
-        const chunkSamples = consumeSamples(
-          pcmQueueRef.current,
-          samplesPerChunk,
-        );
-        queuedSampleCountRef.current -= samplesPerChunk;
-
-        const downsampled = downsampleTo16k(
-          chunkSamples,
-          audioContext.sampleRate,
-        );
-        const wavChunk = encodeMonoPcm16Wav(downsampled, TARGET_SAMPLE_RATE);
-
-        const now = Date.now();
-        if (sessionStartedAtRef.current === null) {
-          sessionStartedAtRef.current = now;
+      stream.current = mic;
+      const ctx = context.current ?? new AudioContext();
+      context.current = ctx;
+      await ctx.resume();
+      await ctx.audioWorklet.addModule('/audio/pcm-capture-worklet.js');
+      if (captureGeneration !== generation.current) return;
+      source.current = ctx.createMediaStreamSource(mic);
+      const node = new AudioWorkletNode(ctx, 'pcm-capture-processor');
+      worklet.current = node;
+      gain.current = ctx.createGain();
+      gain.current.gain.value = 0;
+      source.current.connect(node);
+      node.connect(gain.current);
+      gain.current.connect(ctx.destination);
+      buffer.current = new AudioChunkBuffer(ctx.sampleRate, chunkDurationMs, initialChunkDurationMs);
+      let lastMeterUpdate = 0;
+      node.port.onmessage = (event: MessageEvent<Float32Array[]>) => {
+        if (captureGeneration !== generation.current) return;
+        const mono = downmixChannelsToMono(event.data);
+        if (performance.now() - lastMeterUpdate > 80) {
+          setAudioLevel(computeAudioLevel(mono));
+          lastMeterUpdate = performance.now();
         }
-
-        const elapsedMs = now - sessionStartedAtRef.current;
-        const driftMs =
-          lastChunkAtRef.current === null
-            ? 0
-            : now - lastChunkAtRef.current - resolvedChunkDurationMs;
-        lastChunkAtRef.current = now;
-
-        const chunkIndex = chunkIndexRef.current;
-        chunkIndexRef.current += 1;
-        setChunkCount((prev) => prev + 1);
-        setLastChunkSizeBytes(wavChunk.size);
-
-        if (wavChunk.size > oversizedChunkWarningBytes) {
-          onWarning?.(
-            `Chunk ${chunkIndex} is large (${Math.round(
-              wavChunk.size / 1024,
-            )} KB) and may increase latency.`,
-          );
-        }
-
-        void (async () => {
-          try {
-            const audioB64 = await blobToBase64(wavChunk);
-            const chunkPayload: AudioChunk = {
-              chunkIndex,
-              audioB64,
-              mime: 'audio/wav',
-              blobSizeBytes: wavChunk.size,
-              elapsedMs,
-              driftMs,
-              createdAt: new Date(now).toISOString(),
-            };
-
-            let attempt = 0;
-            const maxAttempts = Math.max(0, chunkFailureRetryCount) + 1;
-
-            while (attempt < maxAttempts) {
-              try {
-                await onChunk(chunkPayload);
-                break;
-              } catch (sendError) {
-                attempt += 1;
-
-                if (attempt >= maxAttempts) {
-                  const sendMessage =
-                    sendError instanceof Error
-                      ? sendError.message
-                      : 'Unknown chunk upload error';
-                  onWarning?.(
-                    `Chunk ${chunkIndex} dropped after ${maxAttempts} attempt(s): ${sendMessage}`,
-                  );
-                  return;
-                }
-
-                onWarning?.(
-                  `Chunk ${chunkIndex} upload failed (attempt ${attempt}/${maxAttempts - 1}). Retrying...`,
-                );
-                await sleep(Math.max(0, chunkFailureRetryDelayMs));
-              }
-            }
-          } catch (error) {
-            const message =
-              error instanceof Error
-                ? error.message
-                : `Failed to process chunk ${chunkIndex}.`;
-            onError?.(message);
-          }
-        })();
-      }
-    };
-
-    streamRef.current.getAudioTracks().forEach((track) => {
-      track.onended = () => {
-        setIsRecording(false);
-        smoothedAudioLevelRef.current = 0;
-        setAudioLevel(0);
-        cleanUpAudioGraph();
-        cleanUpStream();
-        if (!stopRequestedRef.current) {
-          onWarning?.('Recording stopped unexpectedly. Please start again.');
+        for (const segment of buffer.current!.push(mono, performance.now())) {
+          enqueue(segment.samples, ctx.sampleRate, segment.capturedAtMs);
         }
       };
-    });
-
-    setIsRecording(true);
-  }, [
-    cleanUpAudioGraph,
-    chunkDurationMs,
-    resolvedChunkDurationMs,
-    isRecording,
-    onChunk,
-    onError,
-    onWarning,
-    oversizedChunkWarningBytes,
-    permissionStatus,
-    preferredMimeType,
-    requestPermission,
-    cleanUpStream,
-    chunkFailureRetryCount,
-    chunkFailureRetryDelayMs,
-  ]);
-
-  useEffect(() => {
-    return () => {
+      mic.getAudioTracks().forEach((track) => {
+        track.onended = () => callbacks.current.onError('Microphone recording was interrupted.');
+      });
+      setIsRecording(true);
+    } catch (error) {
+      if (captureGeneration !== generation.current) return;
       stop();
-    };
-  }, [stop]);
+      throw error;
+    }
+  }, [chunkDurationMs, initialChunkDurationMs, minRequestIntervalMs, enqueue, stop]);
 
-  return {
-    isRecording,
-    audioLevel,
-    permissionStatus,
-    chunkCount,
-    lastChunkSizeBytes,
-    requestPermission,
-    start,
-    stop,
-  };
+  useEffect(() => () => { generation.current += 1; release(); }, [release]);
+  return { isRecording, audioLevel, chunkCount, prepare, start, stop, flushAndStop };
 }
