@@ -2,6 +2,10 @@ class SessionExpiredError(Exception):
     pass
 
 
+class DemoAccessDenied(Exception):
+    pass
+
+
 class ModelUnavailableError(Exception):
     pass
 

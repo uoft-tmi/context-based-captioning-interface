@@ -157,7 +157,7 @@ def test_named_session_validation_and_read_only_plan(persistence_app):
         assert p.client.post('/api/sessions', json={'name': name, 'mode': 'baseline'}).status_code == 422
     assert p.client.post('/api/sessions', json={'name': '  Week   One  ', 'mode': 'baseline'}).status_code == 200
     assert p.sessions.create_session.call_args.kwargs['name'] == 'Week One'
-    assert p.client.get('/api/account').json() == {'plan': 'free', 'recording_limit_seconds': 30}
+    assert p.client.get('/api/account').json() == {'plan': 'free', 'recording_limit_seconds': 30, 'demo_mode': False, 'transcription_enabled': True}
     assert p.client.post('/api/account', json={'plan': 'paid'}).status_code == 405
 
 

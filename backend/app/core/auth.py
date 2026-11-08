@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 
 from app.core.config import get_settings
+from app.core.exceptions import DemoAccessDenied
 from app.ports.captioning import TokenVerifier
 
 bearer_scheme = HTTPBearer()
@@ -37,6 +38,8 @@ def get_payload(token: str) -> dict:
 def verify_jwt(token: str) -> UUID:
     """Verify JWT and return user ID. Raise HTTPException if invalid."""
     payload = get_payload(token)
+    if settings.DEMO_MODE and str(payload.get("email", "")).strip().casefold() != settings.DEMO_ALLOWED_EMAIL.strip().casefold():
+        raise DemoAccessDenied("This demo is restricted to the approved account.")
     user_id = payload.get("sub")
     if not user_id:
         raise ValueError("User ID not found in token")
@@ -78,5 +81,7 @@ def get_user_id(
 ) -> UUID:
     try:
         return verifier.verify(cred.credentials)
+    except DemoAccessDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (jwt.PyJWTError, ValueError) as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired token") from exc

@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.auth import get_token_verifier
 from app.core.config import get_settings
 from app.core.dependencies import get_caption_service, get_stream_sessions
-from app.core.exceptions import ModelUnavailableError, ProviderRequestError, SessionExpiredError
+from app.core.exceptions import DemoAccessDenied, ModelUnavailableError, ProviderRequestError, SessionExpiredError
 from app.services.caption_model_service import CaptionModelService
 from app.utils.audio_helper import bounded_wav
 from app.ports.captioning import StreamSessionRepository, TokenVerifier
@@ -116,6 +116,8 @@ async def stream_audio(
         try:
             # JWKS retrieval is synchronous; keep it off the streaming event loop.
             user_id = await run_in_threadpool(verifier.verify, token)
+        except DemoAccessDenied as exc:
+            raise HTTPException(403, str(exc)) from exc
         except Exception as exc:
             raise HTTPException(401, "Invalid token") from exc
         session = await sessions.get(session_id, user_id)

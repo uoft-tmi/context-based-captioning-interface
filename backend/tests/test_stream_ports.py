@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.core.auth import get_token_verifier
 from app.core.dependencies import get_caption_store, get_stream_sessions, get_transcription_provider
 from app.core.exceptions import ProviderRequestError
+from app.core.exceptions import DemoAccessDenied
 from app.models.session import Session
 from app.ports.captioning import CaptionStore, StreamSessionRepository, TokenVerifier
 from app.providers.chunked import MockTranscriptionProvider
@@ -109,6 +110,21 @@ def test_entire_stream_accepts_replacement_ports_without_database_or_supabase(is
             assert not session.is_active
             assert sessions.owner is None
             assert store.cleaned
+
+
+def test_unapproved_websocket_never_claims_session_or_starts_provider(isolated_stream):
+    app, session, sessions, store, provider = isolated_stream
+    class DeniedVerifier:
+        def verify(self, token):
+            raise DemoAccessDenied('This demo is restricted to the approved account.')
+    app.dependency_overrides[get_token_verifier] = lambda: DeniedVerifier()
+    with TestClient(app) as http:
+        with http.websocket_connect(f'/ws/sessions/{session.id}/stream?access_token=denied') as ws:
+            message = ws.receive_json()
+            assert message == {'type': 'error', 'text': 'This demo is restricted to the approved account.'}
+    assert sessions.owner is None
+    assert store.transcript is None
+    assert session.is_active
 
 
 def test_permanent_provider_failure_is_visible_and_session_is_released(isolated_stream):

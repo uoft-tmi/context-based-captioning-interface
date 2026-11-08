@@ -28,13 +28,13 @@ SUPABASE_SECRET_KEY=sb_secret_your-backend-key
 POSTGRES_URL=your-supabase-postgresql-connection-string
 ```
 
-Keep the existing `SUPABASE_JWKS_URL` and frontend authentication settings. Apply the top-level Supabase migrations 001–006 as described in the README. Create a private `session-pdfs` bucket; `transcripts` is created privately on the first save if necessary. Existing object paths and database records remain compatible.
+Keep the existing `SUPABASE_JWKS_URL` and frontend authentication settings. Apply the top-level Supabase migrations 001–007 as described in the README. Create a private `session-pdfs` bucket; `transcripts` is created privately on the first save if necessary. Existing object paths and database records remain compatible.
 
 ## Change the PostgreSQL host
 
 The SQL adapter uses `asyncpg` and ordinary PostgreSQL. Supabase, Neon, and local PostgreSQL use the same implementation; there is no vendor-specific database SDK.
 
-1. For a **fresh standalone database**, run [postgres/001_create_tables.sql](../backend/app/migrations/postgres/001_create_tables.sql). Follow it with the top-level `006_dashboard_library.sql` migration. Together they provide session names, stored transcripts, plans, recording allowances, notes, indexes, and lease fields without requiring Supabase auth tables.
+1. For a **fresh standalone database**, run [postgres/001_create_tables.sql](../backend/app/migrations/postgres/001_create_tables.sql). Follow it with the top-level `006_dashboard_library.sql` and `007_provider_usage.sql` migrations. Together they provide session names, stored transcripts, plans, recording allowances, provider usage budgets, notes, indexes, and lease fields without requiring Supabase auth tables.
 2. Set `POSTGRES_URL` to the new host's connection string, including its required TLS options, and restart the backend. Use a connection endpoint compatible with `asyncpg` and the configured pool limits. Prepared-statement caching is already disabled for pooler compatibility.
 3. Leave Supabase Storage and Auth settings as they are if you still use those services.
 

@@ -46,6 +46,8 @@ class CreateSessionRequest(BaseModel):
 class AccountOverview(BaseModel):
     plan: str
     recording_limit_seconds: int
+    demo_mode: bool = False
+    transcription_enabled: bool = True
 
 
 class LibraryFile(BaseModel):

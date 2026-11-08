@@ -46,7 +46,7 @@ class ModelClient:
         path: str,
         *,
         timeout: float,
-        retries: int = 3,
+        retries: int = 1,
         **kwargs,
     ) -> httpx.Response:
         delay = 1.0

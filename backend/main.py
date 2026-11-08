@@ -2,7 +2,9 @@ from contextlib import asynccontextmanager
 
 import httpx
 from app.providers.factory import build_transcription_provider
-from app.clients.pool import close_pool, create_pool
+from app.providers.guarded import BudgetedTranscriptionProvider
+from app.adapters.usage import PostgresTranscriptionBudget
+from app.clients.pool import close_pool, create_pool, get_pool
 from app.clients.supabase_client import init_supabase_client
 from app.core.config import Settings, get_settings
 from app.routers import audio_router, capabilities_router, sessions_router, workspace_router
@@ -17,7 +19,9 @@ async def lifespan(app: FastAPI):
     try:
         await init_supabase_client()
         async with httpx.AsyncClient() as client:
-            app.state.transcription_provider = build_transcription_provider(settings, client)
+            app.state.transcription_provider = BudgetedTranscriptionProvider(
+                build_transcription_provider(settings, client),
+                PostgresTranscriptionBudget(get_pool(), settings), settings)
             yield
     finally:
         await close_pool()
@@ -28,14 +32,9 @@ app = FastAPI(
 )
 
 
-origins = [
-    "https://context-based-captioning-interface.vercel.app",
-    "http://localhost:3000",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=get_settings().CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

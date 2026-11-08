@@ -6,6 +6,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # The deployed demo is private by default. Only signed JWT email claims count.
+    DEMO_MODE: bool = True
+    DEMO_ALLOWED_EMAIL: str = "psjlee42@gmail.com"
+    TRANSCRIPTION_ENABLED: bool = True
+    PROVIDER_REQUESTS_PER_MINUTE: int = Field(default=18, ge=1)
+    PROVIDER_REQUESTS_PER_DAY: int = Field(default=100, ge=1)
+    PROVIDER_REQUESTS_PER_USER_PER_DAY: int = Field(default=50, ge=1)
+    PROVIDER_AUDIO_SECONDS_PER_DAY: int = Field(default=1200, ge=1)
+    PROVIDER_AUDIO_SECONDS_PER_USER_PER_DAY: int = Field(default=600, ge=1)
+    PROVIDER_MIN_CHUNK_INTERVAL_MS: int = Field(default=3500, ge=0, le=60000)
+    CORS_ORIGINS: list[str] = ["https://context-based-captioning-interface.vercel.app", "http://localhost:3000"]
     # Supabase
     SUPABASE_URL: str = ""
     SUPABASE_SECRET_KEY: SecretStr = SecretStr("")
@@ -47,6 +58,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_limits(self):
+        if self.DEMO_MODE and not self.DEMO_ALLOWED_EMAIL.strip():
+            raise ValueError("DEMO_ALLOWED_EMAIL must be set in demo mode")
+        if "*" in self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS must list explicit frontend origins")
         if self.DB_POOL_MIN_SIZE > self.DB_POOL_MAX_SIZE:
             raise ValueError("DB_POOL_MIN_SIZE must not exceed DB_POOL_MAX_SIZE")
         if self.STREAM_LEASE_SECONDS <= max(self.STREAM_SETUP_TIMEOUT_SECONDS, self.STREAM_FINALIZE_TIMEOUT_SECONDS, self.CHUNK_TIMEOUT_SECONDS, self.SESSION_TIMEOUT_SECONDS):

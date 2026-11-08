@@ -42,7 +42,7 @@ export default function SessionDetails() {
   }
   if (!session) return <>{error ? <Notice tone="error">{error}</Notice> : <Loading />}<Link href="/session" className="text-link">Back to dashboard</Link></>;
   const canRecord = session.is_active && !session.is_recording && !session.deleting_at;
-  const incompatible = session.mode === 'context' && !provider?.supports_pdf_notes;
+  const incompatible = (session.mode === 'context' && !provider?.supports_pdf_notes) || provider?.transcription_enabled === false;
   return <section><Steps current={1} /><div className="dashboard-heading"><div><p className="eyebrow">Session details</p><h1>{session.name}</h1><p className="muted">{sessionDate(session.created_at)}</p></div><span className="tag">{sessionStatus(session)}</span></div>
     {error && <Notice tone="error">{error}</Notice>}
     {session.error && <Notice tone="warning">This session ended with an issue. Any saved transcript and uploaded files remain available.</Notice>}

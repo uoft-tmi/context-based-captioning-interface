@@ -45,12 +45,12 @@ Use a short **16 kHz, mono, PCM16 WAV** file. Replace `groq` with `mock` to chec
 
 ## Set up the database
 
-SQL files are in [backend/app/migrations](backend/app/migrations). For Supabase, use the top-level migrations below. For a fresh standalone PostgreSQL database such as Neon, run [postgres/001_create_tables.sql](backend/app/migrations/postgres/001_create_tables.sql) followed by [006_dashboard_library.sql](backend/app/migrations/006_dashboard_library.sql); it has no dependency on Supabase auth tables. See [persistence interfaces and switching providers](docs/persistence.md).
+SQL files are in [backend/app/migrations](backend/app/migrations). For Supabase, use the top-level migrations below. For a fresh standalone PostgreSQL database such as Neon, run [postgres/001_create_tables.sql](backend/app/migrations/postgres/001_create_tables.sql) followed by [006_dashboard_library.sql](backend/app/migrations/006_dashboard_library.sql) and [007_provider_usage.sql](backend/app/migrations/007_provider_usage.sql); these have no dependency on Supabase auth tables. See [persistence interfaces and switching providers](docs/persistence.md).
 
 | Your database | What to run |
 | --- | --- |
-| New Supabase project | Run migrations **001 through 006**, in order. |
-| Existing project with migration 001 already applied | Run the updated **003**, **004**, **005**, and **006**, in that order. If 003-005 are already applied, run only **006**. |
+| New Supabase project | Run migrations **001 through 007**, in order. |
+| Existing project with migration 001 already applied | Run the updated **003**, **004**, **005**, **006**, and **007**, in that order. If 003-006 are already applied, run only **007**. |
 
 You can run each file in the Supabase SQL editor. Stop recording sessions before upgrading an existing database.
 
@@ -61,6 +61,8 @@ Migration 003 closes expired sessions and keeps the newest session if a user has
 In Supabase Storage, create a **private** bucket named `session-pdfs` for uploaded notes. The backend creates the private `transcripts` bucket when it first saves a transcript, provided its backend secret key has permission.
 
 ## Run the backend
+
+For deployment, see [private-demo Docker setup and usage controls](docs/deployment.md). Demo mode defaults to allowing only `psjlee42@gmail.com`. Apply migration **007** before deploying this release; shared provider usage limits survive session deletion and server restarts.
 
 Open a terminal at the repository root:
 

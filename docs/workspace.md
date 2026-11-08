@@ -16,9 +16,9 @@ The **File library** tab groups all remaining uploaded files by session, includi
 
 ## Apply the migration
 
-For an existing Supabase project with migrations 001-005 installed, run `backend/app/migrations/006_dashboard_library.sql` in the SQL editor. For a new Supabase project, run top-level migrations 001-006 in order.
+For an existing Supabase project with migrations 001-005 installed, run `backend/app/migrations/006_dashboard_library.sql` then `007_provider_usage.sql` in the SQL editor. If 006 is already installed, apply only 007. For a new Supabase project, run top-level migrations 001-007 in order.
 
-For a fresh standalone PostgreSQL deployment, run `backend/app/migrations/postgres/001_create_tables.sql` followed by `backend/app/migrations/006_dashboard_library.sql`.
+For a fresh standalone PostgreSQL deployment, run `backend/app/migrations/postgres/001_create_tables.sql` followed by `backend/app/migrations/006_dashboard_library.sql` and `007_provider_usage.sql`.
 
 Migration 006 preserves existing records and gives old sessions a unique generated name. Old PDF transcripts remain downloadable; only new transcripts have stored text previews. Previously deleted note files cannot be restored by the migration.
 

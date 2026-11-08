@@ -64,6 +64,7 @@ async def database(request):
                 # This must succeed before creating any Supabase auth objects.
                 await conn.execute((migrations / 'postgres/001_create_tables.sql').read_text())
                 await conn.execute((migrations / '006_dashboard_library.sql').read_text())
+                await conn.execute((migrations / '007_provider_usage.sql').read_text())
             # Test users are seeded here even for the independent database layout.
             await conn.execute("CREATE SCHEMA auth; CREATE TABLE auth.users (id uuid PRIMARY KEY); CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid';")
             if request.param == "supabase":

@@ -196,7 +196,7 @@ async def claim_stream(db: Pool, session_id: UUID, user_id: UUID, stream_id: UUI
             user_id,
             stream_id,
             get_settings().STREAM_LEASE_SECONDS,
-            get_settings().MAX_SESSION_DURATION_SECONDS,
+            min(30, get_settings().MAX_SESSION_DURATION_SECONDS) if get_settings().DEMO_MODE else get_settings().MAX_SESSION_DURATION_SECONDS,
         )
     return _row_to_session(row) if row else None
 
@@ -237,7 +237,9 @@ async def set_transcript_key(db: Pool, session_id: UUID, user_id: UUID, key: str
 
 async def _account(conn, user_id: UUID) -> AccountOverview:
     plan = await conn.fetchval("SELECT plan FROM account_plans WHERE user_id=$1", user_id) or "free"
-    return AccountOverview(plan=plan, recording_limit_seconds=get_settings().MAX_SESSION_DURATION_SECONDS if plan == "paid" else 30)
+    limit = get_settings().MAX_SESSION_DURATION_SECONDS if plan == "paid" else 30
+    return AccountOverview(plan=plan, recording_limit_seconds=min(limit, 30) if get_settings().DEMO_MODE else limit,
+        demo_mode=get_settings().DEMO_MODE, transcription_enabled=get_settings().TRANSCRIPTION_ENABLED)
 
 
 async def get_account(db: Pool, user_id: UUID) -> AccountOverview:

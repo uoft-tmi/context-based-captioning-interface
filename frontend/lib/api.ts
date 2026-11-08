@@ -7,6 +7,7 @@ export interface ProviderCapabilities {
   recommended_chunk_ms: number;
   initial_chunk_ms?: number | null;
   min_request_interval_ms?: number;
+  transcription_enabled?: boolean;
 }
 export interface SessionSummary {
   id: string;
@@ -96,7 +97,7 @@ export async function getSessionStreamUrlWithAuth(id: string): Promise<string> {
 }
 
 
-export interface AccountOverview { plan: 'free' | 'paid'; recording_limit_seconds: number; }
+export interface AccountOverview { plan: 'free' | 'paid'; recording_limit_seconds: number; demo_mode?: boolean; transcription_enabled?: boolean; }
 export interface LibraryFile { id: string; session_id: string; session_name: string; filename: string; created_at: string; }
 export async function listSessions(): Promise<SessionSummary[]> { return (await request('/api/sessions')).json(); }
 export async function getAccount(): Promise<AccountOverview> { return (await request('/api/account')).json(); }
