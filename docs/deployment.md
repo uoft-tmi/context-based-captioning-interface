@@ -24,15 +24,17 @@ Configure these values in the hosting platform's runtime environment settings:
 | `SUPABASE_SECRET_KEY` | Backend-only Supabase secret key |
 | `SUPABASE_JWKS_URL` | Your project's signing-key endpoint |
 | `POSTGRES_URL` | PostgreSQL connection URL; use the host-appropriate Supabase pooler with TLS |
-| `TRANSCRIPTION_PROVIDER` | `groq` for real audio, `mock` for a no-inference-cost rehearsal, or `custom` for your model server |
+| `TRANSCRIPTION_PROVIDER` | `groq` (default) for real audio, `mock` for a no-inference-cost rehearsal, or `custom` for your model server; override any existing `custom` setting with `groq` when using Groq |
 | `GROQ_API_KEY` | Required only for Groq; backend only |
 | `MODEL_BASE_URL`, `MODEL_API_KEY` | Required for your custom model service |
 | `CORS_ORIGINS` | JSON list containing your exact frontend origin, e.g. `["https://your-app.vercel.app"]` |
 | `DEMO_MODE` | `true` (default) |
-| `DEMO_ALLOWED_EMAIL` | `psjlee42@gmail.com` (default; the only approved account) |
+| `DEMO_ALLOWED_USER_ID` | `73abb4e6-38fc-4e6f-a706-aad1e8ad4bc9` (default; the only approved Supabase user ID) |
 | `TRANSCRIPTION_ENABLED` | `true`; set `false` and restart/redeploy to stop new provider calls |
 
 The entry point listens on `0.0.0.0` and the platform-provided `PORT` (8000 by default), runs one worker, and disables request/WebSocket handshake logs that could expose query tokens. Configure the platform health-check path as `/health`. Preserve WebSocket upgrade support and allow at least several minutes for a recording plus finalization. Set frontend `NEXT_PUBLIC_BACKEND_BASE_URL` to the HTTPS backend URL and rebuild the frontend. Configure Supabase Auth Site URL/redirect URLs for the frontend domain, and sign in with the approved account. Do not expose backend/provider secrets to frontend builds.
+
+Demo access checks the verified JWT's `sub` against `DEMO_ALLOWED_USER_ID`; email addresses and editable user metadata do not grant access. Replace any old `DEMO_ALLOWED_EMAIL` runtime setting with `DEMO_ALLOWED_USER_ID`. The old email setting no longer controls access. An empty or malformed user ID prevents startup.
 
 The Docker build context permits only requirements, runtime source, and entry-point files. It excludes environment files, virtual environments, tests, and local artifacts. The final image runs as a non-root user. Mounting credential files into the image is unnecessary; inject runtime settings through the host.
 
@@ -40,7 +42,7 @@ The Docker build context permits only requirements, runtime source, and entry-po
 
 | Control | Default |
 | --- | --- |
-| Approved account | Only `psjlee42@gmail.com`, checked from the verified JWT's top-level email claim |
+| Approved account | Only Supabase user ID `73abb4e6-38fc-4e6f-a706-aad1e8ad4bc9`, checked from the verified JWT's `sub` claim |
 | Recording duration | 30 seconds per session in demo mode, including paid accounts |
 | Provider requests across the deployment | 18 per rolling minute, 100 per UTC day |
 | Provider requests per user | 50 per UTC day |
@@ -54,7 +56,7 @@ Every transcription attempt reserves at least ten seconds of audio allowance, ma
 
 Reservations are committed before the provider is called, serialized in PostgreSQL across workers, and retained even when a request fails or a session is deleted. Restarts, deleting history, and creating another account do not reset the shared limits. Missing migrations/database errors deny inference. Requests beyond a limit end recording with a readable message; received caption chunks are still saved when possible. If custom finalization is denied, received chunks become the final transcript without another model call.
 
-Disabling demo mode removes the email restriction and restores normal paid/free recording durations; it does not disable the shared provider budgets. Keep demo mode on for this deployment.
+Disabling demo mode removes the user ID restriction and restores normal paid/free recording durations; it does not disable the shared provider budgets. Keep demo mode on for this deployment.
 
 These controls bound application-issued calls and reserved audio. They do not cap a GPU host's model-loading, idle/keep-warm, storage, or other billable resources, nor calls made with the same key outside this app. Set a provider-side spending limit as well. In particular, turn off always-on workers and use scale-to-zero on the model host. The 30-second recording limit alone is not a dollar budget.
 

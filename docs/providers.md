@@ -1,6 +1,6 @@
 # Transcription providers and modular tests
 
-The browser uses the same backend API regardless of the transcription provider. Choose the provider in `backend/.env` and restart the backend. Provider keys never go to the browser.
+The browser uses the same backend API regardless of the transcription provider. Groq is the default. Choose the provider in `backend/.env` or your hosting platform's runtime environment settings and restart the backend. Provider keys never go to the browser.
 
 ## Groq: free-tier Whisper transcription
 
@@ -45,7 +45,7 @@ MODEL_BASE_URL=https://your-model-server.example
 MODEL_API_KEY=your-model-key
 ```
 
-This remains the default and preserves the existing `/v1/init`, `/v1/process-notes`, `/v1/transcribe-chunk`, and `/v1/finalize` contract. It is currently the only adapter that supports PDF lecture notes.
+Select `custom` explicitly to use the existing `/v1/init`, `/v1/process-notes`, `/v1/transcribe-chunk`, and `/v1/finalize` contract. It is currently the only adapter that supports PDF lecture notes.
 
 ## Wispr Flow: optional approved API access
 

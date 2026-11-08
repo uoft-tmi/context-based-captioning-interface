@@ -12,7 +12,8 @@ from app.providers.chunked import GroqWhisperProvider, MockTranscriptionProvider
 from app.providers.factory import build_transcription_provider
 
 
-async def test_groq_sends_documented_multipart_request_and_parses_text():
+async def test_default_provider_sends_groq_multipart_request_and_parses_text(monkeypatch):
+    monkeypatch.delenv("TRANSCRIPTION_PROVIDER", raising=False)
     async def handle(request):
         assert str(request.url) == "https://api.groq.com/openai/v1/audio/transcriptions"
         assert request.headers["authorization"] == "Bearer test-key"
@@ -25,7 +26,9 @@ async def test_groq_sends_documented_multipart_request_and_parses_text():
         assert b'name="language"' in body and b'en' in body
         return httpx.Response(200, json={"text": "Lecture caption"})
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
-        provider = GroqWhisperProvider(http, "test-key")
+        settings = Settings(_env_file=None, GROQ_API_KEY="test-key", MODEL_BASE_URL="")
+        provider = build_transcription_provider(settings, http)
+        assert isinstance(provider, GroqWhisperProvider)
         assert isinstance(provider, TranscriptionProvider)
         assert await provider.transcribe(uuid4(), b"RIFF audio bytes", 7, "baseline") == "Lecture caption"
         assert not provider.capabilities.supports_pdf_notes
@@ -102,7 +105,7 @@ async def test_factory_keeps_custom_model_protocol_and_base_path():
         assert request.headers["authorization"] == "Bearer custom-key"
         assert json.loads(request.content)["chunk_index"] == 0
         return httpx.Response(200, json={"partial_text": "custom caption"})
-    settings = Settings(_env_file=None, MODEL_BASE_URL="https://model.test/prefix", MODEL_API_KEY="custom-key")
+    settings = Settings(_env_file=None, TRANSCRIPTION_PROVIDER="custom", MODEL_BASE_URL="https://model.test/prefix", MODEL_API_KEY="custom-key")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
         provider = build_transcription_provider(settings, http)
         assert provider.capabilities.supports_pdf_notes

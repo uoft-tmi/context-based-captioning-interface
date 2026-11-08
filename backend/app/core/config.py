@@ -1,14 +1,15 @@
 from functools import lru_cache
 from typing import Literal
+from uuid import UUID
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # The deployed demo is private by default. Only signed JWT email claims count.
+    # The deployed demo is private by default. Match the verified JWT subject.
     DEMO_MODE: bool = True
-    DEMO_ALLOWED_EMAIL: str = "psjlee42@gmail.com"
+    DEMO_ALLOWED_USER_ID: UUID = UUID("73abb4e6-38fc-4e6f-a706-aad1e8ad4bc9")
     TRANSCRIPTION_ENABLED: bool = True
     PROVIDER_REQUESTS_PER_MINUTE: int = Field(default=18, ge=1)
     PROVIDER_REQUESTS_PER_DAY: int = Field(default=100, ge=1)
@@ -44,8 +45,8 @@ class Settings(BaseSettings):
     MODEL_BASE_URL: str = ""
     MODEL_API_KEY: str = ""
 
-    # Transcription adapters. The existing model server remains the default.
-    TRANSCRIPTION_PROVIDER: Literal["custom", "groq", "wispr", "mock"] = "custom"
+    # Groq is the default; select custom explicitly to use a separate model server.
+    TRANSCRIPTION_PROVIDER: Literal["custom", "groq", "wispr", "mock"] = "groq"
     TRANSCRIPTION_LANGUAGE: str = "en"  # empty string enables provider autodetection
     GROQ_API_KEY: SecretStr = SecretStr("")
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
@@ -58,8 +59,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_limits(self):
-        if self.DEMO_MODE and not self.DEMO_ALLOWED_EMAIL.strip():
-            raise ValueError("DEMO_ALLOWED_EMAIL must be set in demo mode")
         if "*" in self.CORS_ORIGINS:
             raise ValueError("CORS_ORIGINS must list explicit frontend origins")
         if self.DB_POOL_MIN_SIZE > self.DB_POOL_MAX_SIZE:

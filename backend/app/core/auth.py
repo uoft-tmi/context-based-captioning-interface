@@ -38,12 +38,13 @@ def get_payload(token: str) -> dict:
 def verify_jwt(token: str) -> UUID:
     """Verify JWT and return user ID. Raise HTTPException if invalid."""
     payload = get_payload(token)
-    if settings.DEMO_MODE and str(payload.get("email", "")).strip().casefold() != settings.DEMO_ALLOWED_EMAIL.strip().casefold():
-        raise DemoAccessDenied("This demo is restricted to the approved account.")
     user_id = payload.get("sub")
     if not user_id:
         raise ValueError("User ID not found in token")
-    return UUID(user_id)
+    user_id = UUID(user_id)
+    if settings.DEMO_MODE and user_id != settings.DEMO_ALLOWED_USER_ID:
+        raise DemoAccessDenied("This demo is restricted to the approved account.")
+    return user_id
 
 
 class SupabaseTokenVerifier:

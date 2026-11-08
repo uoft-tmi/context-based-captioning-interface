@@ -2,7 +2,7 @@
 
 Live captions for lectures, with optional PDF notes to help the model understand course terminology. When a recording ends, you can read the transcript and download it as a PDF.
 
-The app uses a **Next.js frontend**, a **FastAPI backend**, and **Supabase** for sign-in, PostgreSQL, and file storage by default. Storage and database access use separate interfaces so they can be changed independently. A separate model server handles transcription.
+The app uses a **Next.js frontend**, a **FastAPI backend**, and **Supabase** for sign-in, PostgreSQL, and file storage by default. Storage and database access use separate interfaces so they can be changed independently. Groq handles transcription by default; a separate model server is optional.
 
 ## What you need
 
@@ -29,7 +29,7 @@ TRANSCRIPTION_PROVIDER=groq
 GROQ_API_KEY=your-key-here
 ```
 
-Create a key in the [Groq console](https://console.groq.com/keys). Keep it on the backend. The existing `custom` provider remains the default until you change the setting.
+Create a key in the [Groq console](https://console.groq.com/keys). Keep it on the backend. Groq is the default provider; set `TRANSCRIPTION_PROVIDER=custom` explicitly to use your model server. On a hosting platform, configure `GROQ_API_KEY` in the backend's runtime environment settings and redeploy. Change any existing `TRANSCRIPTION_PROVIDER=custom` setting to `groq`.
 
 Groq sends the first second of audio for an earlier first caption, then uses 3.2-second chunks with request pacing to stay within its published free-tier request limit for one continuous recording (including a final partial chunk). Limits apply across your account, so use `mock` for high-concurrency tests. Groq, Wispr, and mock currently support **audio-only baseline mode**; the UI disables PDF mode for them.
 
@@ -62,7 +62,7 @@ In Supabase Storage, create a **private** bucket named `session-pdfs` for upload
 
 ## Run the backend
 
-For deployment, see [private-demo Docker setup and usage controls](docs/deployment.md). Demo mode defaults to allowing only `psjlee42@gmail.com`. Apply migration **007** before deploying this release; shared provider usage limits survive session deletion and server restarts.
+For deployment, see [private-demo Docker setup and usage controls](docs/deployment.md). Demo mode defaults to allowing only Supabase user ID `73abb4e6-38fc-4e6f-a706-aad1e8ad4bc9`, configured through `DEMO_ALLOWED_USER_ID`. Apply migration **007** before deploying this release; shared provider usage limits survive session deletion and server restarts.
 
 Open a terminal at the repository root:
 
