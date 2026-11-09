@@ -14,9 +14,13 @@ The browser uses the same backend API regardless of the transcription provider. 
    TRANSCRIPTION_LANGUAGE=en
    ```
 
-3. Restart the backend and create a **Audio only** session in the UI (baseline mode).
+3. Install backend dependencies with `uv pip install --python .venv/bin/python -r requirements.txt`, restart the backend, and create an **Audio only** or **Use lecture notes** session in the UI.
 
-This adapter uploads each WAV chunk to Groq's [documented transcription endpoint](https://console.groq.com/docs/speech-to-text). It joins the successful chunk transcripts when the recording ends. It does not upload PDF notes, call a session-initialization endpoint, or spend another API request on finalization.
+This adapter uploads each WAV chunk to Groq's [documented transcription endpoint](https://console.groq.com/docs/speech-to-text). It joins the successful chunk transcripts when the recording ends. Session setup, PDF text extraction, and finalization run locally without additional Groq requests.
+
+In **Use lecture notes** mode, upload at least one text-based PDF before recording. The backend extracts vocabulary from the first 20 pages and up to 50,000 text characters of each PDF, removes common words, and prioritizes frequent terms. A short glossary is included in the `prompt` field of every transcription request. Full PDFs are kept in the existing private file storage; only the glossary accompanies audio to Groq. Glossaries are isolated by session and cleared on finalization or restart of that stream.
+
+Groq's prompt is limited to 224 tokens and guides vocabulary/style rather than following chat instructions. The glossary uses a conservative 224 UTF-8 byte budget to stay within that token limit without downloading a tokenizer. This is vocabulary guidance, not full-document reasoning or post-processing of captions. Use notes in the same language as the audio; recognition improvements must be measured against audio-only mode. Scanned/image-only, unreadable, and encrypted PDFs are rejected for Groq context with a readable error. OCR is not included. Audio-only sessions can still store PDFs for reference and never send a glossary.
 
 Groq currently publishes a 20-request-per-minute limit for this model on its free plan. The browser sends the first second of audio immediately after collecting it, then collects 3.2-second chunks, approximately 19 requests per minute for one continuous recording. Sends are paced at least 3.2 seconds apart so queued audio cannot burst requests after a slow response; stopping can use one additional request for the final partial chunk. Quotas are shared by the organization: overlapping recordings, rapid stop/start cycles, other applications, or account-specific limits can still produce HTTP 429 errors. Check your [account limits](https://console.groq.com/docs/rate-limits).
 
@@ -45,7 +49,7 @@ MODEL_BASE_URL=https://your-model-server.example
 MODEL_API_KEY=your-model-key
 ```
 
-Select `custom` explicitly to use the existing `/v1/init`, `/v1/process-notes`, `/v1/transcribe-chunk`, and `/v1/finalize` contract. It is currently the only adapter that supports PDF lecture notes.
+Select `custom` explicitly to use the existing `/v1/init`, `/v1/process-notes`, `/v1/transcribe-chunk`, and `/v1/finalize` contract. This adapter forwards complete PDFs to your model server; Groq instead uses locally extracted vocabulary hints.
 
 ## Wispr Flow: optional approved API access
 

@@ -23,7 +23,10 @@ class CaptionModelService:
     async def upload_notes(self, session: Session) -> None:
         if session.mode != "context":
             return
-        for pdf in await self._store.load_notes(session):
+        notes = await self._store.load_notes(session)
+        if not notes:
+            raise ValueError("Upload at least one PDF before recording with lecture notes, or create an audio-only session.")
+        for pdf in notes:
             await self._provider.process_notes(session.id, pdf)
 
     async def transcribe(self, session: Session, audio_chunk: bytes, chunk_index: int) -> str:

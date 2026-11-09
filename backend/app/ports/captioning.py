@@ -13,6 +13,7 @@ class ProviderCapabilities:
     recommended_chunk_ms: int = 2500
     initial_chunk_ms: int | None = None
     min_request_interval_ms: int = 0
+    requires_text_notes: bool = False
 
 
 @runtime_checkable

@@ -44,6 +44,15 @@ async def test_context_forwards_notes_through_injected_ports(session, ports):
     provider.process_notes.assert_any_await(session.id, b"pdf-two")
 
 
+async def test_context_requires_notes_before_recording(session, ports):
+    provider, store = ports
+    session.mode = "context"
+    store.load_notes.return_value = []
+    with pytest.raises(ValueError, match='Upload at least one PDF'):
+        await CaptionModelService(provider, store).upload_notes(session)
+    provider.process_notes.assert_not_awaited()
+
+
 async def test_unsupported_context_rejected_before_provider_start(session, ports):
     provider, store = ports
     provider.capabilities = ProviderCapabilities("baseline", supports_pdf_notes=False)

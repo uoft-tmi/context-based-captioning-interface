@@ -1,13 +1,16 @@
-"""Stateless providers that transcribe individual WAV chunks."""
+"""Providers that transcribe individual WAV chunks with optional note hints."""
 import asyncio
 import base64
+from collections import Counter
 from typing import Sequence
 from uuid import UUID
 
 import httpx
+from starlette.concurrency import run_in_threadpool
 
 from app.core.exceptions import ProviderRequestError
 from app.ports.captioning import ProviderCapabilities
+from app.utils.note_context import MAX_VOCABULARY_TERMS, pdf_vocabulary, vocabulary_prompt
 
 
 class BaselineChunkProvider:
@@ -68,7 +71,7 @@ class GroqWhisperProvider(HostedChunkProvider):
     # Leave room for a final partial chunk under the 20 RPM free-tier limit.
     # Quotas are organization-wide; other recordings/apps still share them.
     capabilities = ProviderCapabilities(
-        name="groq", supports_pdf_notes=False,
+        name="groq", supports_pdf_notes=True, requires_text_notes=True,
         recommended_chunk_ms=3200, initial_chunk_ms=1000,
         min_request_interval_ms=3200,
     )
@@ -79,13 +82,37 @@ class GroqWhisperProvider(HostedChunkProvider):
                  timeout_seconds: float = 15):
         super().__init__(client, api_key, base_url, language, timeout_seconds)
         self._model = model
+        self._note_context: dict[UUID, Counter[str]] = {}
+
+    async def start_session(self, session_id: UUID, mode: str) -> None:
+        if mode not in ("baseline", "context"):
+            raise ValueError("Unsupported captioning mode")
+        self._note_context.pop(session_id, None)
+        if mode == "context":
+            self._note_context[session_id] = Counter()
+
+    async def process_notes(self, session_id: UUID, pdf_bytes: bytes) -> None:
+        if session_id not in self._note_context:
+            raise ValueError("Start a lecture-notes session before processing notes.")
+        vocabulary = await run_in_threadpool(pdf_vocabulary, pdf_bytes)
+        combined = self._note_context[session_id] + vocabulary
+        self._note_context[session_id] = Counter(dict(combined.most_common(MAX_VOCABULARY_TERMS)))
 
     async def transcribe(self, session_id: UUID, audio: bytes, chunk_index: int, mode: str) -> str:
         data = {"model": self._model, "response_format": "json"}
         if self._language:
             data["language"] = self._language
+        if mode == "context":
+            vocabulary = self._note_context.get(session_id)
+            if not vocabulary:
+                raise ValueError("Upload a text-based PDF before recording with lecture notes.")
+            data["prompt"] = vocabulary_prompt(vocabulary)
         return await self._request("/audio/transcriptions", data=data,
                                    files={"file": (f"chunk-{chunk_index}.wav", audio, "audio/wav")})
+
+    async def finalize(self, session_id: UUID, transcript_chunks: Sequence[str]) -> str:
+        self._note_context.pop(session_id, None)
+        return " ".join(transcript_chunks)
 
 
 class WisprFlowProvider(HostedChunkProvider):

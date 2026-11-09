@@ -45,6 +45,7 @@ pydantic==2.12.5
 pydantic-core==2.41.5
 pydantic-extra-types==2.11.0
 pydantic-settings==2.13.1
+pypdf==7.0.0
 pygments==2.19.2
 pyiceberg==0.11.0
 pyjwt==2.11.0

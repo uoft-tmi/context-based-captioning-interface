@@ -17,7 +17,7 @@ Set `TRANSCRIPTION_PROVIDER` in `backend/.env`, then restart the backend.
 
 | Value | Use it for | API key needed? |
 | --- | --- | --- |
-| `groq` | Real speech recognition using Groq's free-tier Whisper API | Yes: `GROQ_API_KEY` |
+| `groq` | Whisper transcription, with optional vocabulary hints from text-based lecture PDFs | Yes: `GROQ_API_KEY` |
 | `mock` | Repeatable tests with synthetic captions | No |
 | `custom` | Your existing model server, including PDF notes | Your model server's credentials |
 | `wispr` | Optional Wispr Flow integration with approved API access | Yes: `WISPR_API_KEY` |
@@ -31,7 +31,7 @@ GROQ_API_KEY=your-key-here
 
 Create a key in the [Groq console](https://console.groq.com/keys). Keep it on the backend. Groq is the default provider; set `TRANSCRIPTION_PROVIDER=custom` explicitly to use your model server. On a hosting platform, configure `GROQ_API_KEY` in the backend's runtime environment settings and redeploy. Change any existing `TRANSCRIPTION_PROVIDER=custom` setting to `groq`.
 
-Groq sends the first second of audio for an earlier first caption, then uses 3.2-second chunks with request pacing to stay within its published free-tier request limit for one continuous recording (including a final partial chunk). Limits apply across your account, so use `mock` for high-concurrency tests. Groq, Wispr, and mock currently support **audio-only baseline mode**; the UI disables PDF mode for them.
+Groq sends the first second of audio for an earlier first caption, then uses paced chunks. The deployment's usage guard can increase the chunk length and minimum request interval. Limits apply across your account, so use `mock` for high-concurrency tests. Groq supports **Audio only** and **Use lecture notes**: note mode extracts a short vocabulary glossary from text-based PDFs and sends it as recognition hints. Audio-only uploads are reference files and do not affect captions. Wispr and mock support audio-only mode.
 
 **Wispr is optional, not a verified free API.** Its official documentation requires [approved access](https://api-docs.wisprflow.ai/quickstart) and describes [usage-based billing](https://api-docs.wisprflow.ai/usage_billing).
 
@@ -68,9 +68,9 @@ Open a terminal at the repository root:
 
 ```bash
 cd backend
-python3 -m venv .venv
+uv venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+uv pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env
 ```
 
@@ -129,7 +129,7 @@ Open **http://localhost:3000**.
 
 1. Sign in to open the **Dashboard**, which lists active and past sessions.
 2. Select **Create session**, provide a unique name, and choose a captioning mode.
-3. Open **Session details** to upload optional PDF files and review the recording allowance.
+3. Open **Session details** to review the recording allowance. In **Use lecture notes** mode, upload at least one PDF before recording. In **Audio only** mode, optional reference PDFs are stored without affecting captions. Groq note context requires selectable PDF text; scanned PDFs need OCR first.
 4. Continue to **Recording**, start your microphone, and watch captions appear.
 5. Stop recording, or let the recording allowance end it automatically. The **Transcript** page displays the saved text and a formatted PDF download.
 

@@ -12,7 +12,7 @@ from tests.helpers import wav_audio
 
 def guarded(name='groq', **settings):
     provider = AsyncMock()
-    provider.capabilities = ProviderCapabilities(name, supports_pdf_notes=name == 'custom')
+    provider.capabilities = ProviderCapabilities(name, supports_pdf_notes=name in ('custom', 'groq'))
     budget = AsyncMock()
     wrapper = BudgetedTranscriptionProvider(provider, budget, Settings(_env_file=None, **settings))
     return wrapper, provider, budget
@@ -49,6 +49,23 @@ async def test_groq_start_and_finalize_do_not_spend_request_budget():
     wrapper, provider, budget = guarded()
     await wrapper.start_session(uuid4(), 'baseline')
     await wrapper.finalize(uuid4(), ['captions'])
+    budget.reserve.assert_not_awaited()
+
+
+async def test_groq_local_note_processing_does_not_spend_request_budget():
+    wrapper, provider, budget = guarded()
+    session = uuid4()
+    await wrapper.start_session(session, 'context')
+    await wrapper.process_notes(session, b'pdf')
+    provider.process_notes.assert_awaited_once_with(session, b'pdf')
+    budget.reserve.assert_not_awaited()
+
+
+async def test_kill_switch_prevents_local_note_processing():
+    wrapper, provider, budget = guarded(TRANSCRIPTION_ENABLED=False)
+    with pytest.raises(ProviderRequestError, match='disabled'):
+        await wrapper.process_notes(uuid4(), b'pdf')
+    provider.process_notes.assert_not_awaited()
     budget.reserve.assert_not_awaited()
 
 

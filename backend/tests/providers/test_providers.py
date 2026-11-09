@@ -19,6 +19,7 @@ async def test_default_provider_sends_groq_multipart_request_and_parses_text(mon
         assert request.headers["authorization"] == "Bearer test-key"
         assert request.headers["content-type"].startswith("multipart/form-data;")
         body = await request.aread()
+        assert b'name="prompt"' not in body
         assert b'name="file"; filename="chunk-7.wav"' in body
         assert b'Content-Type: audio/wav' in body
         assert b'whisper-large-v3-turbo' in body
@@ -31,7 +32,8 @@ async def test_default_provider_sends_groq_multipart_request_and_parses_text(mon
         assert isinstance(provider, GroqWhisperProvider)
         assert isinstance(provider, TranscriptionProvider)
         assert await provider.transcribe(uuid4(), b"RIFF audio bytes", 7, "baseline") == "Lecture caption"
-        assert not provider.capabilities.supports_pdf_notes
+        assert provider.capabilities.supports_pdf_notes
+        assert provider.capabilities.requires_text_notes
         assert provider.capabilities.recommended_chunk_ms == 3200
         assert provider.capabilities.initial_chunk_ms == 1000
         assert provider.capabilities.min_request_interval_ms == 3200
@@ -87,7 +89,7 @@ async def test_hosted_providers_keep_sessions_separate_and_make_no_finalize_call
         assert await provider.finalize(first, ["lecture one"]) == "lecture one"
         assert await provider.finalize(second, ["lecture two"]) == "lecture two"
         with pytest.raises(ValueError, match="baseline"):
-            await provider.start_session(uuid4(), "context")
+            await WisprFlowProvider(http, "test-key").start_session(uuid4(), "context")
 
 
 @pytest.mark.parametrize('name,expected', [('mock', MockTranscriptionProvider), ('groq', GroqWhisperProvider), ('wispr', WisprFlowProvider)])

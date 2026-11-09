@@ -26,7 +26,10 @@ class BudgetedTranscriptionProvider:
         await self._provider.start_session(session_id, mode)
 
     async def process_notes(self, session_id: UUID, pdf_bytes: bytes) -> None:
-        await self._budget.reserve(session_id, 'notes')
+        if not self._settings.TRANSCRIPTION_ENABLED:
+            raise ProviderRequestError("Transcription is temporarily disabled by the administrator.")
+        if self.capabilities.name == 'custom':
+            await self._budget.reserve(session_id, 'notes')
         await self._provider.process_notes(session_id, pdf_bytes)
 
     async def transcribe(self, session_id: UUID, audio: bytes, chunk_index: int, mode: str) -> str:

@@ -4,6 +4,7 @@ export type SessionMode = 'baseline' | 'context';
 export interface ProviderCapabilities {
   name: string;
   supports_pdf_notes: boolean;
+  requires_text_notes?: boolean;
   recommended_chunk_ms: number;
   initial_chunk_ms?: number | null;
   min_request_interval_ms?: number;

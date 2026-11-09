@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from app.core.config import get_settings
 from app.utils.pdf_helper import transcript_to_pdf_bytes
+from app.utils.note_context import pdf_vocabulary
 from starlette.concurrency import run_in_threadpool
 from app.models.session import Session, SessionErrorRequest, SessionMode
 from app.ports.persistence import NotesRepository, ObjectStore, PersistenceConflictError, SessionRepository
@@ -118,6 +119,7 @@ async def upload_note(
     session: Session,
     objects: ObjectStore,
     notes: NotesRepository,
+    require_text: bool = False,
 ) -> dict:
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -145,6 +147,12 @@ async def upload_note(
         raise HTTPException(
             status_code=400, detail="File size exceeds the maximum limit"
         )
+
+    if require_text:
+        try:
+            await run_in_threadpool(pdf_vocabulary, contents)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
         file_key = uuid4().hex + ".pdf"

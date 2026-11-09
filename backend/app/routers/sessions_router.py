@@ -20,7 +20,7 @@ async def create_session(
     provider: TranscriptionProvider = Depends(get_transcription_provider),
 ):
     if body.mode == "context" and not provider.capabilities.supports_pdf_notes:
-        raise HTTPException(400, "The selected provider supports baseline sessions only. Use the custom model for PDF notes.")
+        raise HTTPException(400, "The selected provider supports audio-only sessions. Choose a provider with lecture-note support.")
     return await session_service.create_session(sessions=sessions, user_id=user_id, mode=body.mode, name=body.name)
 
 
@@ -69,6 +69,7 @@ async def upload_session_note(
         session=session,
         objects=objects,
         notes=notes,
+        require_text=session.mode == "context" and provider.capabilities.requires_text_notes,
     )
 
 

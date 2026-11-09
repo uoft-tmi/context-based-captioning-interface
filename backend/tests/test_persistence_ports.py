@@ -5,19 +5,24 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.adapters.caption_store import StoredCaptionStore
 from app.core.auth import get_token_verifier, get_user_id
+from app.core.config import get_settings
 from app.core.dependencies import get_notes_repository, get_object_store, get_session_repository
-from app.models.session import AccountOverview, LibraryFile, Session
+from app.models.session import AccountOverview, LibraryFile, Session, SessionMode
 from app.ports.captioning import ProviderCapabilities
 from app.ports.persistence import NotesRepository, ObjectStore, PersistenceConflictError, SessionRepository
 from app.providers.chunked import MockTranscriptionProvider
-from app.routers import audio_router, sessions_router, workspace_router
+from app.providers.chunked import GroqWhisperProvider
+from app.providers.guarded import BudgetedTranscriptionProvider
+from app.ports.usage import TranscriptionBudget
+from app.routers import audio_router, capabilities_router, sessions_router, workspace_router
 from app.utils.storage_helper import cleanup_storage
-from tests.helpers import wav_audio
+from tests.helpers import multipart_fields, pdf_notes, wav_audio
 
 
 class MemoryObjects:
@@ -71,6 +76,7 @@ def persistence_app():
     app.include_router(sessions_router.router)
     app.include_router(workspace_router.router)
     app.include_router(audio_router.router)
+    app.include_router(capabilities_router.router)
     app.dependency_overrides[get_session_repository] = lambda: sessions
     app.dependency_overrides[get_notes_repository] = lambda: notes
     app.dependency_overrides[get_object_store] = lambda: objects
@@ -107,6 +113,64 @@ def test_note_upload_download_delete_use_independent_stores(persistence_app):
     p.notes.delete_note.assert_awaited_once_with(
         session_id=p.session.id, user_id=p.session.user_id, filename='lecture.pdf',
     )
+
+
+async def test_groq_context_flows_from_pdf_upload_through_websocket_and_transcript(persistence_app):
+    p = persistence_app
+    requests = []
+    async def groq_request(request):
+        fields = multipart_fields(request, await request.aread())
+        requests.append(fields)
+        assert fields['prompt'] == 'PostgreSQL, MVCC'
+        return httpx.Response(200, json={'text': 'PostgreSQL uses MVCC.'})
+    budget = AsyncMock(spec=TranscriptionBudget)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(groq_request)) as http:
+        provider = GroqWhisperProvider(http, 'test-key')
+        p.app.state.transcription_provider = BudgetedTranscriptionProvider(provider, budget, get_settings())
+        caps = p.client.get('/api/capabilities').json()
+        assert caps['supports_pdf_notes'] and caps['requires_text_notes']
+        p.session.mode = SessionMode('context')
+        response = p.client.post('/api/sessions', json={'mode': 'context', 'name': 'Database lecture'})
+        assert response.status_code == 200
+        p.sessions.create_session.assert_awaited_once_with(user_id=p.session.user_id, mode='context', name='Database lecture')
+        response = p.client.post(f'/api/sessions/{p.session.id}/notes',
+            files={'file': ('lecture.pdf', pdf_notes('PostgreSQL MVCC'), 'application/pdf')})
+        assert response.status_code == 200
+        metadata = p.notes.save_note.call_args.kwargs
+        p.notes.list_note_storage_keys.return_value = [metadata['storage_key']]
+        assert requests == []
+        with p.client.websocket_connect(f'/ws/sessions/{p.session.id}/stream?access_token=test') as ws:
+            assert ws.receive_json()['type'] == 'ready'
+            ws.send_bytes(wav_audio())
+            assert ws.receive_json()['text'] == 'PostgreSQL uses MVCC.'
+            ws.send_json({'type': 'stop'})
+            final = ws.receive_json()
+            assert final['transcript_saved'] and final['text'] == 'PostgreSQL uses MVCC.'
+        assert p.session.transcript_text == 'PostgreSQL uses MVCC.'
+        assert p.client.get(f'/api/sessions/{p.session.id}/download').content.startswith(b'%PDF')
+        assert len(requests) == 1
+        budget.reserve.assert_awaited_once_with(p.session.id, 'transcribe', 10)
+        # Finalization releases note context even though the files remain saved.
+        with pytest.raises(ValueError, match='text-based PDF'):
+            await provider.transcribe(p.session.id, b'wav', 1, 'context')
+        assert ('session-pdfs', f'{p.session.user_id}/{p.session.id}/{metadata["storage_key"]}') in p.objects.files
+
+
+@pytest.mark.parametrize('mode, expected', [('context', 422), ('baseline', 200)])
+async def test_groq_validates_note_text_but_keeps_reference_uploads_available(persistence_app, mode, expected):
+    p = persistence_app
+    p.session.mode = SessionMode(mode)
+    async with httpx.AsyncClient() as http:
+        p.app.state.transcription_provider = GroqWhisperProvider(http, 'test-key')
+        response = p.client.post(f'/api/sessions/{p.session.id}/notes',
+            files={'file': ('scanned.pdf', pdf_notes(''), 'application/pdf')})
+    assert response.status_code == expected
+    if mode == 'context':
+        assert 'OCR' in response.json()['detail']
+        assert not p.objects.files
+        p.notes.save_note.assert_not_awaited()
+    else:
+        p.notes.save_note.assert_awaited_once()
 
 
 def test_stream_saves_pdf_and_rest_downloads_from_same_object_store(persistence_app):

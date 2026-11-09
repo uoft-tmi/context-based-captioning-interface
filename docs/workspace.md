@@ -5,8 +5,8 @@ The signed-in landing page is `/session`. It lists every session, including acti
 ## Flow
 
 1. **Dashboard**: open an existing session, download/read a transcript, delete a session, or create a new one.
-2. **Create session**: provide a name and choose captioning mode. Names are normalized for whitespace and are unique per user, ignoring case, across active and historical sessions. A name can be reused after its session is deleted.
-3. **Session details**: see recording allowance and upload/download/delete PDF materials. Up to three PDFs of up to 10 MB each are supported. Files can be kept for reference even when the current provider does not use PDF context.
+2. **Create session**: provide a name. Choose captioning mode only when the provider supports lecture-note context; otherwise, the page explains that captions use audio only. Names are normalized for whitespace and are unique per user, ignoring case, across active and historical sessions. A name can be reused after its session is deleted.
+3. **Session details**: see recording allowance and upload/download/delete PDF materials. Up to three PDFs of up to 10 MB each are supported. Audio-only sessions label these as optional **Reference PDFs** and explain that they do not affect captions, even if the provider supports note context. Context sessions with a compatible provider label uploads as **Lecture notes for captioning** and require at least one before recording. Groq uses a short glossary from the first 20 pages of each text-based PDF as transcription hints; scanned PDFs need OCR first. An active context session with an incompatible provider explains how to create an audio-only session instead.
 4. **Recording**: captions stream as before. Recording automatically stops at the account's allowance and saves the transcript.
 5. **Transcript**: read a paragraph-formatted transcript and download a PDF with the session name, creation date, recording duration, running header, and page numbers.
 
